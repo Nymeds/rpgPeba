@@ -23,10 +23,13 @@ import type {
   ServerToClientEvents,
   SocketAck
 } from "./types";
+import idleSprite from "./assets/warrior/idle.gif";
+import runSprite from "./assets/warrior/run.gif";
 
 // Tecnico: Tamanho do mapa exibido no frontend.
 // Crianca: Mapa tem 20 por 20 quadradinhos.
 const MAP_SIZE = 20;
+const CAMERA_VIEW_SIZE = 11;
 
 // Tecnico: Chave usada no localStorage para token JWT.
 // Crianca: Nome da gaveta onde guardamos o cracha.
@@ -44,6 +47,15 @@ type Screen = "auth" | "character" | "game";
 // Tecnico: Modos do formulario de autenticacao.
 // Crianca: Botao alterna entre entrar e cadastrar.
 type AuthMode = "login" | "register";
+
+type DirecaoHorizontal = "left" | "right";
+
+type EstadoVisualJogador = {
+  facing: DirecaoHorizontal;
+  isMoving: boolean;
+};
+
+const SPRITE_MOVE_TIMEOUT_MS = 180;
 
 function obterMensagemErro(error: unknown): string {
   // Tecnico: Normaliza erro desconhecido para string amigavel.
@@ -77,6 +89,10 @@ function obterInventarioVazio(): Array<string | null> {
   return Array.from({ length: 6 }, () => null);
 }
 
+function limitarNumero(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
 function agruparJogadoresPorCelula(players: Player[]): Map<string, Player[]> {
   // Tecnico: Agrupa jogadores por coordenada para renderizar o grid sem busca cara por celula.
   // Crianca: Junta os jogadores por quadradinho do mapa.
@@ -93,6 +109,30 @@ function agruparJogadoresPorCelula(players: Player[]): Map<string, Player[]> {
   }
 
   return map;
+}
+
+function obterDirecaoHorizontal(
+  jogadorAnterior: Player | undefined,
+  jogadorAtual: Player,
+  fallback: DirecaoHorizontal
+): DirecaoHorizontal {
+  if (!jogadorAnterior) {
+    return fallback;
+  }
+  if (jogadorAtual.x < jogadorAnterior.x) {
+    return "left";
+  }
+  if (jogadorAtual.x > jogadorAnterior.x) {
+    return "right";
+  }
+  return fallback;
+}
+
+function houveMovimento(jogadorAnterior: Player | undefined, jogadorAtual: Player): boolean {
+  if (!jogadorAnterior) {
+    return false;
+  }
+  return jogadorAnterior.x !== jogadorAtual.x || jogadorAnterior.y !== jogadorAtual.y;
 }
 
 export default function Aplicativo() {
@@ -141,9 +181,52 @@ export default function Aplicativo() {
   // Crianca: Diario das ultimas pancadas.
   const [combatLog, setCombatLog] = useState<string[]>([]);
 
+  const [estadoVisualJogadores, setEstadoVisualJogadores] = useState<Record<number, EstadoVisualJogador>>({});
+
   // Tecnico: Referencia mutavel para socket ativo entre renders.
   // Crianca: Guarda o fio da conexao para usar depois.
   const socketRef = useRef<Socket<ServerToClientEvents, ClientToServerEvents> | null>(null);
+  const jogadoresAnterioresRef = useRef<Map<number, Player>>(new Map());
+  const timeoutsMovimentoRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
+
+  const limparTimeoutMovimento = useCallback((playerId: number) => {
+    const timeoutId = timeoutsMovimentoRef.current.get(playerId);
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+      timeoutsMovimentoRef.current.delete(playerId);
+    }
+  }, []);
+
+  const agendarRetornoIdle = useCallback(
+    (playerId: number) => {
+      limparTimeoutMovimento(playerId);
+      const timeoutId = setTimeout(() => {
+        setEstadoVisualJogadores((atual) => {
+          const estadoJogador = atual[playerId];
+          if (!estadoJogador || !estadoJogador.isMoving) {
+            return atual;
+          }
+          return {
+            ...atual,
+            [playerId]: {
+              ...estadoJogador,
+              isMoving: false
+            }
+          };
+        });
+        timeoutsMovimentoRef.current.delete(playerId);
+      }, SPRITE_MOVE_TIMEOUT_MS);
+      timeoutsMovimentoRef.current.set(playerId, timeoutId);
+    },
+    [limparTimeoutMovimento]
+  );
+
+  const limparTodosTimeoutsMovimento = useCallback(() => {
+    for (const timeoutId of timeoutsMovimentoRef.current.values()) {
+      clearTimeout(timeoutId);
+    }
+    timeoutsMovimentoRef.current.clear();
+  }, []);
 
   const desconectarSocket = useCallback(() => {
     // Tecnico: Fecha conexao socket atual e limpa referencia.
@@ -164,13 +247,22 @@ export default function Aplicativo() {
       setAccountUsername("");
       setPlayers([]);
       setSelfCharacterId(null);
+      setEstadoVisualJogadores({});
+      jogadoresAnterioresRef.current.clear();
+      limparTodosTimeoutsMovimento();
       localStorage.removeItem(TOKEN_KEY);
       if (message) {
         setInfoMessage(message);
       }
     },
-    [desconectarSocket]
+    [desconectarSocket, limparTodosTimeoutsMovimento]
   );
+
+  useEffect(() => {
+    return () => {
+      limparTodosTimeoutsMovimento();
+    };
+  }, [limparTodosTimeoutsMovimento]);
 
   useEffect(() => {
     // Tecnico: Sem token, garante fluxo na tela de autenticacao.
@@ -227,6 +319,9 @@ export default function Aplicativo() {
     // Crianca: Canal em tempo real so liga quando voce entra no mapa.
     if (screen !== "game" || !token) {
       desconectarSocket();
+      jogadoresAnterioresRef.current.clear();
+      limparTodosTimeoutsMovimento();
+      setEstadoVisualJogadores({});
       return;
     }
 
@@ -245,6 +340,40 @@ export default function Aplicativo() {
     // Crianca: Redesenha quem esta no mapa em tempo real.
     socket.on("world:update", (payload) => {
       setPlayers(payload.players);
+      const jogadoresAnteriores = jogadoresAnterioresRef.current;
+      const jogadoresQueMoveram = payload.players
+        .filter((player) => houveMovimento(jogadoresAnteriores.get(player.id), player))
+        .map((player) => player.id);
+      const idsJogadoresQueMoveram = new Set(jogadoresQueMoveram);
+
+      const idsAtuais = new Set(payload.players.map((player) => player.id));
+      for (const playerId of [...timeoutsMovimentoRef.current.keys()]) {
+        if (!idsAtuais.has(playerId)) {
+          limparTimeoutMovimento(playerId);
+        }
+      }
+
+      setEstadoVisualJogadores((estadoAtual) => {
+        const proximosEstados: Record<number, EstadoVisualJogador> = {};
+
+        for (const player of payload.players) {
+          const jogadorAnterior = jogadoresAnteriores.get(player.id);
+          const estadoAnterior = estadoAtual[player.id];
+          const facing = obterDirecaoHorizontal(jogadorAnterior, player, estadoAnterior?.facing ?? "right");
+          const isMoving = idsJogadoresQueMoveram.has(player.id) || Boolean(estadoAnterior?.isMoving);
+
+          proximosEstados[player.id] = {
+            facing,
+            isMoving
+          };
+        }
+
+        return proximosEstados;
+      });
+      jogadoresAnterioresRef.current = new Map(payload.players.map((player) => [player.id, player]));
+      for (const playerId of jogadoresQueMoveram) {
+        agendarRetornoIdle(playerId);
+      }
     });
 
     // Tecnico: Adiciona eventos de combate ao topo do log.
@@ -270,8 +399,10 @@ export default function Aplicativo() {
       if (socketRef.current === socket) {
         socketRef.current = null;
       }
+      jogadoresAnterioresRef.current.clear();
+      limparTodosTimeoutsMovimento();
     };
-  }, [screen, token, desconectarSocket]);
+  }, [screen, token, desconectarSocket, agendarRetornoIdle, limparTimeoutMovimento, limparTodosTimeoutsMovimento]);
 
   const enviarMovimento = useCallback((direction: Direction) => {
     // Tecnico: Lanca comando de movimento via socket com callback de erro.
@@ -281,6 +412,21 @@ export default function Aplicativo() {
       return;
     }
 
+    if (selfCharacterId) {
+      setEstadoVisualJogadores((atual) => {
+        const estadoAnterior = atual[selfCharacterId] ?? { facing: "right", isMoving: false };
+        const facing = direction === "left" ? "left" : direction === "right" ? "right" : estadoAnterior.facing;
+        return {
+          ...atual,
+          [selfCharacterId]: {
+            facing,
+            isMoving: true
+          }
+        };
+      });
+      agendarRetornoIdle(selfCharacterId);
+    }
+
     const ack: SocketAck = (response) => {
       if (!response.ok && response.error) {
         setInfoMessage(response.error);
@@ -288,7 +434,7 @@ export default function Aplicativo() {
     };
 
     socket.emit("player:move", { direction }, ack);
-  }, []);
+  }, [selfCharacterId, agendarRetornoIdle]);
 
   const enviarAtaque = useCallback((targetId?: number) => {
     // Tecnico: Emite ataque livre ou direcionado para targetId.
@@ -348,6 +494,18 @@ export default function Aplicativo() {
   // Tecnico: Indexa jogadores por celula para renderizar grid de forma eficiente.
   // Crianca: Organiza por quadradinho para achar rapido quem esta onde.
   const jogadoresPorCelula = useMemo(() => agruparJogadoresPorCelula(players), [players]);
+
+  const origemCamera = useMemo(() => {
+    const meio = Math.floor(CAMERA_VIEW_SIZE / 2);
+    const limite = Math.max(0, MAP_SIZE - CAMERA_VIEW_SIZE);
+    if (!jogadorAtual) {
+      return { x: 0, y: 0 };
+    }
+    return {
+      x: limitarNumero(jogadorAtual.x - meio, 0, limite),
+      y: limitarNumero(jogadorAtual.y - meio, 0, limite)
+    };
+  }, [jogadorAtual]);
 
   const aoEnviarAutenticacao = async (event: FormEvent<HTMLFormElement>) => {
     // Tecnico: Intercepta submit para fluxo SPA.
@@ -422,11 +580,13 @@ export default function Aplicativo() {
   };
 
   const celulasRenderizadas = useMemo(() => {
-    // Tecnico: Gera 400 celulas (20 x 20) para render do mapa.
-    // Crianca: Desenha todos os quadradinhos do tabuleiro.
-    return Array.from({ length: MAP_SIZE * MAP_SIZE }, (_, index) => {
-      const x = index % MAP_SIZE;
-      const y = Math.floor(index / MAP_SIZE);
+    // Tecnico: Gera camera local (11 x 11) presa no jogador atual.
+    // Crianca: Mostra so a parte perto de voce e move junto quando voce anda.
+    return Array.from({ length: CAMERA_VIEW_SIZE * CAMERA_VIEW_SIZE }, (_, index) => {
+      const localX = index % CAMERA_VIEW_SIZE;
+      const localY = Math.floor(index / CAMERA_VIEW_SIZE);
+      const x = origemCamera.x + localX;
+      const y = origemCamera.y + localY;
 
       // Tecnico: Recupera jogadores presentes nessa celula.
       // Crianca: Vê quem esta em cima desse quadrado.
@@ -444,9 +604,10 @@ export default function Aplicativo() {
         cellClassName += " enemy";
       }
 
-      // Tecnico: Marcadores curtos e tooltip informativo.
-      // Crianca: Mostra "YOU" para voce e "ATK" para inimigo clicavel.
-      const marker = selfOnTile ? "YOU" : enemyOnTile ? "ATK" : "";
+      const jogadorRenderizado = selfOnTile ?? enemyOnTile ?? null;
+      const estadoVisual = jogadorRenderizado ? estadoVisualJogadores[jogadorRenderizado.id] : undefined;
+      const spriteAtual = estadoVisual?.isMoving ? runSprite : idleSprite;
+      const flipParaEsquerda = estadoVisual?.facing === "left";
       const tooltip = hasPlayer
         ? cellPlayers.map((player) => `${player.name} (${player.hp}/${player.maxHp})`).join(" | ")
         : `Tile ${x},${y}`;
@@ -465,11 +626,20 @@ export default function Aplicativo() {
             }
           }}
         >
-          <span>{marker}</span>
+          {jogadorRenderizado ? (
+            <img
+              src={spriteAtual}
+              alt={jogadorRenderizado.name}
+              className={`player-sprite${flipParaEsquerda ? " flip-left" : ""}`}
+              draggable={false}
+            />
+          ) : null}
+          {selfOnTile ? <span className="cell-tag">YOU</span> : null}
+          {!selfOnTile && enemyOnTile ? <span className="cell-tag">ATK</span> : null}
         </button>
       );
     });
-  }, [jogadoresPorCelula, selfCharacterId, enviarAtaque]);
+  }, [jogadoresPorCelula, selfCharacterId, enviarAtaque, estadoVisualJogadores, origemCamera]);
 
   return (
     <div className="app">
@@ -549,7 +719,12 @@ export default function Aplicativo() {
       {screen === "game" ? (
         <section className="panel game-panel">
           <div className="game-layout">
-            <div className="world-grid">{celulasRenderizadas}</div>
+            <div className="world-wrap">
+              <div className="camera-title">
+                Camera [{origemCamera.x},{origemCamera.y}] - foco em {jogadorAtual?.name ?? "carregando"}
+              </div>
+              <div className="world-grid">{celulasRenderizadas}</div>
+            </div>
 
             <aside className="hud">
               <div className="card">

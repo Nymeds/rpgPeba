@@ -191,56 +191,103 @@ button {
 .game-layout {
   display: grid;
   gap: 16px;
-  grid-template-columns: minmax(280px, 1fr) 320px;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  align-items: start;
+}
+
+.world-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.camera-title {
+  border: 2px solid #334833;
+  border-radius: 10px;
+  background: #eef8e6;
+  padding: 8px 10px;
+  font-weight: 700;
+  font-size: 0.92rem;
 }
 
 /* Tecnico: Grid 20x20 com proporcao quadrada fixa.
    Crianca: Tabuleiro verde do jogo. */
 .world-grid {
-  background: linear-gradient(155deg, #516f4b, #6f935f);
-  border: 3px solid #334633;
+  background: linear-gradient(155deg, #3f5e3a, #5d844e);
+  border: 3px solid #2f452f;
   border-radius: 16px;
   padding: 8px;
   display: grid;
-  gap: 2px;
-  grid-template-columns: repeat(20, 1fr);
-  width: min(72vw, 710px);
+  gap: 3px;
+  grid-template-columns: repeat(11, minmax(0, 1fr));
+  width: min(78vw, 760px);
+  max-width: 100%;
   aspect-ratio: 1 / 1;
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.08);
 }
 
 /* Tecnico: Celula base do mapa.
    Crianca: Cada quadradinho onde jogador pisa. */
 .cell {
   border: 1px solid var(--tile-border);
-  background: var(--tile);
+  background: #92ad80;
   color: #1f271f;
   font-size: 0.56rem;
   font-weight: 700;
-  border-radius: 4px;
+  border-radius: 6px;
   display: grid;
-  place-content: center;
+  place-items: center;
   padding: 0;
-  min-height: 20px;
+  min-height: 0;
+  aspect-ratio: 1 / 1;
   cursor: pointer;
+  overflow: hidden;
+  position: relative;
 }
 
-/* Tecnico: Ajuste visual do texto interno.
-   Crianca: Letra pequena no centro da celula. */
-.cell span {
-  transform: scale(0.85);
+/* Tecnico: Sprite do personagem ocupa toda a celula.
+   Crianca: GIF do heroi preenche o quadradinho. */
+.player-sprite {
+  width: 88%;
+  height: 88%;
+  object-fit: contain;
+  image-rendering: pixelated;
+  transform-origin: center;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.4));
+}
+
+/* Tecnico: Espelha sprite para personagem olhando a esquerda.
+   Crianca: Vira o desenho de lado quando anda para esquerda. */
+.player-sprite.flip-left {
+  transform: scaleX(-1);
+}
+
+/* Tecnico: Selo curto para "YOU" e "ATK" sobre o sprite.
+   Crianca: Etiqueta pequena no canto da celula. */
+.cell-tag {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  padding: 2px 4px;
+  border-radius: 3px;
+  font-size: 0.48rem;
+  line-height: 1;
+  color: #102010;
+  background: rgba(255, 255, 255, 0.82);
+  pointer-events: none;
 }
 
 /* Tecnico: Cor da celula do proprio jogador.
    Crianca: Seu quadrado fica azul. */
 .cell.self {
-  background: linear-gradient(130deg, var(--accent-2), #6fc5dc);
+  background: linear-gradient(130deg, #41a6be, #77d0e6);
   color: #052f3a;
 }
 
 /* Tecnico: Cor da celula com inimigo atacavel.
    Crianca: Inimigo fica laranja para voce clicar. */
 .cell.enemy {
-  background: linear-gradient(130deg, var(--accent), #fdb06a);
+  background: linear-gradient(130deg, #f3784f, #ffbd7b);
   color: #40260e;
 }
 
