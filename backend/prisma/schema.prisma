@@ -1,0 +1,30 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Account {
+  id           Int       @id @default(autoincrement())
+  username     String    @unique
+  passwordHash String
+  createdAt    DateTime  @default(now())
+  character    Character?
+}
+
+model Character {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  accountId Int      @unique
+  account   Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  x         Int      @default(10)
+  y         Int      @default(10)
+  hp        Int      @default(100)
+  maxHp     Int      @default(100)
+  inventory String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
