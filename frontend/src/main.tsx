@@ -7,7 +7,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 
 // Tecnico: Componente principal da aplicacao.
-// Crianca: Tela grande do jogo.
+// Crianca: Tela principal da rede social fake.
 import Aplicativo from "./App";
 
 // Tecnico: Estilos globais.
@@ -15,7 +15,7 @@ import Aplicativo from "./App";
 import "./styles.css";
 
 // Tecnico: Cria root na div #root e renderiza o Aplicativo com StrictMode.
-// Crianca: Coloca o jogo dentro da caixa principal da pagina.
+// Crianca: Coloca o app dentro da caixa principal da pagina.
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <Aplicativo />

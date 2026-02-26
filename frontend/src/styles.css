@@ -1,373 +1,233 @@
-/* Tecnico: Importa fontes decorativas para identidade visual do jogo.
-   Crianca: Pega letras bonitas para deixar a tela com cara de RPG. */
-@import url("https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;700&family=Space+Grotesk:wght@400;500;700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Share+Tech+Mono&display=swap");
 
-/* Tecnico: Variaveis CSS centrais para tema e consistencia.
-   Crianca: Potes de tinta para usar as mesmas cores em tudo. */
 :root {
-  --bg-top: #f6edd8;
-  --bg-bottom: #d7e5cf;
-  --panel: #fffdf6;
-  --ink: #1f1c14;
-  --line: #3f4f3f;
-  --accent: #f3784f;
-  --accent-2: #2fa9c7;
-  --grass: #6c8f62;
-  --tile: #9bb285;
-  --tile-border: #526c4d;
+  --bg-0: #06080b;
+  --bg-1: #0b0f14;
+  --bg-2: #111821;
+  --line: #1d2a38;
+  --text: #d6f5df;
+  --muted: #88b39a;
+  --accent: #39ff96;
+  --accent-2: #2ee8ff;
+  --danger: #ff5a8f;
 }
 
-/* Tecnico: Box model previsivel.
-   Crianca: Todo elemento conta borda e padding no mesmo jeito. */
 * {
   box-sizing: border-box;
 }
 
-/* Tecnico: Fundo global com gradientes, tipografia e reset de margem.
-   Crianca: Pintura do chao da pagina inteira. */
 body {
   margin: 0;
   min-height: 100vh;
-  color: var(--ink);
-  font-family: "Space Grotesk", "Segoe UI", sans-serif;
+  color: var(--text);
+  font-family: "JetBrains Mono", "Consolas", monospace;
   background:
-    radial-gradient(circle at 15% 10%, #fff6d8 0, transparent 35%),
-    radial-gradient(circle at 90% 15%, #d9f4dd 0, transparent 40%),
-    linear-gradient(180deg, var(--bg-top) 0%, var(--bg-bottom) 100%);
+    radial-gradient(circle at 20% 0%, rgba(46, 232, 255, 0.14), transparent 30%),
+    radial-gradient(circle at 80% 10%, rgba(57, 255, 150, 0.1), transparent 30%),
+    linear-gradient(180deg, var(--bg-0), var(--bg-1) 45%, #05070a);
 }
 
-/* Tecnico: Root ocupa tela inteira para layout vertical.
-   Crianca: Caixa principal cresce ate o fim da tela. */
 #root {
   min-height: 100vh;
 }
 
-/* Tecnico: Container principal centralizado.
-   Crianca: Coloca todo o app no meio com espacamento. */
 .app {
-  width: min(1180px, 95vw);
+  width: min(1100px, 95vw);
   margin: 0 auto;
-  padding: 24px 0 28px;
+  padding: 20px 0 26px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 14px;
 }
 
-/* Tecnico: Cabecalho com destaque visual e sombra.
-   Crianca: Placa de titulo do jogo. */
-.hero {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 12px;
-  border: 2px solid var(--line);
-  background: linear-gradient(145deg, #ffffff, #f2eedc);
-  border-radius: 18px;
-  padding: 14px 16px;
-  box-shadow: 0 10px 24px rgba(45, 59, 40, 0.12);
+.top-bar {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: linear-gradient(165deg, rgba(14, 22, 31, 0.95), rgba(7, 11, 16, 0.95));
+  padding: 12px 14px;
 }
 
-/* Tecnico: Titulo principal com fonte de impacto.
-   Crianca: Nome grande e estiloso no topo. */
-.hero h1 {
+.top-bar h1 {
   margin: 0;
-  font-family: "Chakra Petch", "Space Grotesk", sans-serif;
-  font-size: clamp(1.7rem, 3vw, 2.3rem);
+  font-family: "Share Tech Mono", "JetBrains Mono", monospace;
+  text-transform: lowercase;
+  font-size: clamp(1.2rem, 3vw, 1.8rem);
+  letter-spacing: 0.06em;
+  color: var(--accent);
 }
 
-/* Tecnico: Ajuste de margem do subtitulo.
-   Crianca: Distancia certinha do texto pequeno. */
-.hero p {
-  margin: 5px 0 0;
+.top-bar small {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
 }
 
-/* Tecnico: Cartao base para blocos da UI.
-   Crianca: Caixinhas onde cada parte do jogo mora. */
 .panel {
-  background: var(--panel);
-  border: 2px solid var(--line);
-  border-radius: 18px;
-  padding: 16px;
-  box-shadow: 0 10px 22px rgba(45, 59, 40, 0.1);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: linear-gradient(160deg, rgba(14, 21, 30, 0.92), rgba(9, 14, 20, 0.92));
+  padding: 12px;
+  box-shadow: inset 0 0 0 1px rgba(57, 255, 150, 0.05);
 }
 
-/* Tecnico: Largura limitada para tela de autenticacao.
-   Crianca: Formulario de login fica mais compacto e centralizado. */
+.panel h2 {
+  margin: 0 0 10px;
+  color: var(--accent-2);
+  font-size: 1rem;
+  text-transform: lowercase;
+}
+
 .auth-panel {
-  width: min(460px, 100%);
-  margin: 0 auto;
+  width: min(420px, 100%);
+  margin: 70px auto 0;
 }
 
-/* Tecnico: Form vertical padrao.
-   Crianca: Campos ficam um embaixo do outro. */
 form {
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
 
-/* Tecnico: Labels mais legiveis.
-   Crianca: Nome dos campos fica forte para ler facil. */
+.inline-form {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
 label {
-  font-weight: 700;
-  font-size: 0.94rem;
+  text-transform: lowercase;
+  font-size: 0.9rem;
+  color: var(--muted);
 }
 
-/* Tecnico: Campo de entrada com borda e padding confortaveis.
-   Crianca: Caixa de texto bonita para digitar. */
 input {
-  border: 2px solid #4e5f4e;
-  border-radius: 10px;
-  padding: 10px 12px;
-  font-size: 0.98rem;
+  width: 100%;
+  border: 1px solid #2a4253;
+  border-radius: 8px;
+  background: #050a10;
+  color: var(--text);
+  padding: 10px;
   font-family: inherit;
-  background: #fffffd;
 }
 
-/* Tecnico: Estado de foco com contorno acessivel.
-   Crianca: Quando clica no campo ele ganha brilho azul. */
 input:focus {
-  outline: 2px solid #8fd2e1;
-  outline-offset: 1px;
+  outline: 1px solid var(--accent-2);
+  outline-offset: 0;
 }
 
-/* Tecnico: Herdar fonte padrao nos botoes.
-   Crianca: Botoes usam a mesma letra da tela. */
 button {
   font-family: inherit;
 }
 
-/* Tecnico: Botao principal de acao.
-   Crianca: Botao laranja de confirmar. */
-.primary-button {
-  margin-top: 8px;
-  border: 0;
-  border-radius: 11px;
-  background: linear-gradient(120deg, var(--accent), #ef9f5b);
-  color: white;
-  font-size: 1rem;
-  font-weight: 700;
-  padding: 11px 14px;
+.btn-primary {
+  border: 1px solid #2dbf79;
+  border-radius: 8px;
+  background: linear-gradient(125deg, #1a643f, #187c8f);
+  color: #effff7;
+  padding: 9px 12px;
   cursor: pointer;
+  text-transform: lowercase;
 }
 
-/* Tecnico: Estado desabilitado.
-   Crianca: Botao fica apagado quando nao pode clicar. */
-.primary-button:disabled {
-  opacity: 0.7;
-  cursor: not-allowed;
+.btn-primary:hover {
+  filter: brightness(1.07);
 }
 
-/* Tecnico: Botao textual para trocar modo login/cadastro.
-   Crianca: Linkzinho para alternar formulario. */
-.link-button {
-  margin-top: 12px;
-  border: 0;
-  background: transparent;
-  text-decoration: underline;
-  cursor: pointer;
-  color: #264f6a;
-}
-
-/* Tecnico: Botao secundario de sair.
-   Crianca: Botao branco para encerrar sessao. */
-.ghost-button {
-  border: 2px solid #354a35;
-  background: white;
-  border-radius: 11px;
-  padding: 8px 12px;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-/* Tecnico: Evita vazamento visual do painel do jogo.
-   Crianca: Corta conteudo para nao passar da borda. */
-.game-panel {
-  overflow: hidden;
-}
-
-/* Tecnico: Layout de duas colunas (mapa + HUD).
-   Crianca: Mapa de um lado e informacoes do outro. */
-.game-layout {
-  display: grid;
-  gap: 16px;
-  grid-template-columns: minmax(0, 1fr) 320px;
-  align-items: start;
-}
-
-.world-wrap {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.camera-title {
-  border: 2px solid #334833;
-  border-radius: 10px;
-  background: #eef8e6;
+.btn-ghost {
+  border: 1px solid #355169;
+  border-radius: 8px;
+  background: #0a1017;
+  color: var(--text);
   padding: 8px 10px;
-  font-weight: 700;
-  font-size: 0.92rem;
-}
-
-/* Tecnico: Grid 20x20 com proporcao quadrada fixa.
-   Crianca: Tabuleiro verde do jogo. */
-.world-grid {
-  background: linear-gradient(155deg, #3f5e3a, #5d844e);
-  border: 3px solid #2f452f;
-  border-radius: 16px;
-  padding: 8px;
-  display: grid;
-  gap: 3px;
-  grid-template-columns: repeat(11, minmax(0, 1fr));
-  width: min(78vw, 760px);
-  max-width: 100%;
-  aspect-ratio: 1 / 1;
-  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.08);
-}
-
-/* Tecnico: Celula base do mapa.
-   Crianca: Cada quadradinho onde jogador pisa. */
-.cell {
-  border: 1px solid var(--tile-border);
-  background: #92ad80;
-  color: #1f271f;
-  font-size: 0.56rem;
-  font-weight: 700;
-  border-radius: 6px;
-  display: grid;
-  place-items: center;
-  padding: 0;
-  min-height: 0;
-  aspect-ratio: 1 / 1;
   cursor: pointer;
-  overflow: hidden;
-  position: relative;
+  text-transform: lowercase;
 }
 
-/* Tecnico: Sprite do personagem ocupa toda a celula.
-   Crianca: GIF do heroi preenche o quadradinho. */
-.player-sprite {
-  width: 88%;
-  height: 88%;
-  object-fit: contain;
-  image-rendering: pixelated;
-  transform-origin: center;
-  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.4));
+.btn-ghost:hover {
+  border-color: var(--accent-2);
 }
 
-/* Tecnico: Espelha sprite para personagem olhando a esquerda.
-   Crianca: Vira o desenho de lado quando anda para esquerda. */
-.player-sprite.flip-left {
-  transform: scaleX(-1);
+.lobby {
+  display: grid;
+  gap: 12px;
 }
 
-/* Tecnico: Selo curto para "YOU" e "ATK" sobre o sprite.
-   Crianca: Etiqueta pequena no canto da celula. */
-.cell-tag {
-  position: absolute;
-  right: 2px;
-  bottom: 2px;
-  padding: 2px 4px;
-  border-radius: 3px;
-  font-size: 0.48rem;
-  line-height: 1;
-  color: #102010;
-  background: rgba(255, 255, 255, 0.82);
-  pointer-events: none;
+.rooms-list,
+.users-list,
+.messages {
+  margin: 8px 0 0;
+  padding-left: 18px;
 }
 
-/* Tecnico: Cor da celula do proprio jogador.
-   Crianca: Seu quadrado fica azul. */
-.cell.self {
-  background: linear-gradient(130deg, #41a6be, #77d0e6);
-  color: #052f3a;
-}
-
-/* Tecnico: Cor da celula com inimigo atacavel.
-   Crianca: Inimigo fica laranja para voce clicar. */
-.cell.enemy {
-  background: linear-gradient(130deg, #f3784f, #ffbd7b);
-  color: #40260e;
-}
-
-/* Tecnico: Coluna lateral do HUD.
-   Crianca: Pilha de caixas com status do jogador. */
-.hud {
+.rooms-list li {
   display: flex;
-  flex-direction: column;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.room-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 260px;
+  gap: 12px;
+}
+
+.chat-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
   gap: 10px;
 }
 
-/* Tecnico: Cartao interno do HUD.
-   Crianca: Mini caixa de informacao. */
-.card {
-  border: 2px solid #466046;
-  border-radius: 12px;
-  background: #fbfff6;
-  padding: 10px 12px;
+.chat-actions {
+  display: flex;
+  gap: 8px;
 }
 
-/* Tecnico: Titulos dos cards.
-   Crianca: Nome de cada sessao do painel. */
-.card h3 {
-  margin: 0 0 8px;
-  font-family: "Chakra Petch", "Space Grotesk", sans-serif;
-}
-
-/* Tecnico: Ajuste de margem nos paragrafos internos.
-   Crianca: Espaco bonito entre linhas. */
-.card p {
-  margin: 6px 0;
-}
-
-/* Tecnico: Grid do inventario com 3 colunas.
-   Crianca: Mochila organizada em 3 por linha. */
-.inventory-grid {
-  display: grid;
-  gap: 7px;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-/* Tecnico: Estilo de cada slot do inventario.
-   Crianca: Quadradinho onde o item aparece. */
-.slot {
-  border: 2px dashed #678667;
-  border-radius: 8px;
-  min-height: 32px;
-  display: grid;
-  place-content: center;
-  font-weight: 600;
-  background: #eef6e7;
-}
-
-/* Tecnico: Lista compacta com scroll.
-   Crianca: Lista curtinha que rola para caber. */
-.compact-list {
-  margin: 0;
-  padding-left: 18px;
-  max-height: 130px;
+.messages {
+  max-height: 420px;
   overflow: auto;
 }
 
-/* Tecnico: Barra inferior de status.
-   Crianca: Faixa que mostra avisos do jogo. */
-.status-bar {
-  border: 2px solid #2d402d;
-  border-radius: 12px;
-  background: #f5fde8;
-  padding: 10px 12px;
-  font-weight: 600;
+.messages li {
+  margin-bottom: 10px;
 }
 
-/* Tecnico: Layout responsivo para telas menores.
-   Crianca: No celular vira uma coluna so. */
-@media (max-width: 980px) {
-  .game-layout {
+.meta {
+  display: flex;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.messages p {
+  margin: 2px 0 0;
+  white-space: pre-wrap;
+}
+
+.users-panel .users-list {
+  max-height: 440px;
+  overflow: auto;
+}
+
+@media (max-width: 900px) {
+  .room-layout {
     grid-template-columns: 1fr;
   }
 
-  .world-grid {
-    width: 100%;
+  .chat-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .inline-form {
+    flex-direction: column;
+    align-items: stretch;
   }
 }

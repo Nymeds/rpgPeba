@@ -1,263 +1,166 @@
 import type { FastifyInstance } from "fastify";
 import { Server as SocketIOServer, type Socket } from "socket.io";
 
-import { prisma } from "./db.js";
-import { limitarAoMapa, MAP_SIZE, SPAWN_POSITION, paraJogadorPublico } from "./game.js";
-import { validarPayloadAtaque, validarPayloadMovimento } from "./schemas.js";
-import { ATTACK_DAMAGE, ATTACK_RANGE } from "./socketConstants.js";
-
-const idsPersonagensOnline = new Set<number>();
-
-type ContextoSocket = {
-  accountId: number;
-  characterId: number;
-};
+import { validarNicknameSocket, validarPayloadMensagemChat, validarPayloadSala } from "./socialSchemas.js";
+import {
+  entrarNaSala,
+  listarSalas,
+  listarUsuariosSala,
+  obterNicknamePorSocket,
+  publicarMensagem,
+  registrarUsuarioConectado,
+  removerUsuarioConectado,
+  sairDaSala
+} from "./socialState.js";
 
 type ConfirmacaoSocket = (response: { ok: boolean; error?: string }) => void;
 
-type Direcao = "up" | "down" | "left" | "right";
-
-function responderSucesso(confirmacao?: ConfirmacaoSocket): void {
-  confirmacao?.({ ok: true });
-}
-
-function responderErro(confirmacao: ConfirmacaoSocket | undefined, mensagem: string): void {
-  confirmacao?.({ ok: false, error: mensagem });
-}
-
-function distanciaManhattan(x1: number, y1: number, x2: number, y2: number): number {
-  return Math.abs(x1 - x2) + Math.abs(y1 - y2);
-}
-
-function calcularProximaPosicao(direction: Direcao, x: number, y: number): { x: number; y: number } {
-  switch (direction) {
-    case "up":
-      return { x, y: limitarAoMapa(y - 1) };
-    case "down":
-      return { x, y: limitarAoMapa(y + 1) };
-    case "left":
-      return { x: limitarAoMapa(x - 1), y };
-    case "right":
-      return { x: limitarAoMapa(x + 1), y };
-  }
-}
-
-async function resolverContextoSocket(app: FastifyInstance, socket: Socket): Promise<ContextoSocket> {
-  const rawToken = socket.handshake.auth?.token;
-  const token = typeof rawToken === "string" ? rawToken : "";
-
-  if (!token) {
-    throw new Error("Token ausente.");
-  }
-
-  const payload = app.jwt.verify<{ accountId: number }>(token);
-
-  const character = await prisma.character.findUnique({
-    where: { accountId: payload.accountId },
-    select: { id: true }
-  });
-
-  if (!character) {
-    throw new Error("Crie um personagem antes de conectar no mundo.");
-  }
-
-  return {
-    accountId: payload.accountId,
-    characterId: character.id
-  };
-}
-
-async function transmitirMundo(io: SocketIOServer): Promise<void> {
-  if (idsPersonagensOnline.size === 0) {
-    io.emit("world:update", { mapSize: MAP_SIZE, players: [] });
+function responder(confirmacao: ConfirmacaoSocket | undefined, ok: boolean, erro?: string): void {
+  if (ok) {
+    confirmacao?.({ ok: true });
     return;
   }
+  confirmacao?.({ ok: false, error: erro ?? "Falha desconhecida." });
+}
 
-  const characters = await prisma.character.findMany({
-    where: {
-      id: {
-        in: [...idsPersonagensOnline]
-      }
-    },
-    select: {
-      id: true,
-      name: true,
-      x: true,
-      y: true,
-      hp: true,
-      maxHp: true,
-      inventory: true
-    }
-  });
+function extrairNicknameHandshake(socket: Socket): unknown {
+  return socket.handshake.auth?.nickname;
+}
 
-  io.emit("world:update", {
-    mapSize: MAP_SIZE,
-    players: characters.map((character) => paraJogadorPublico(character, idsPersonagensOnline))
+function emitirListaSalas(io: SocketIOServer): void {
+  io.emit("room:list", { rooms: listarSalas() });
+}
+
+function emitirUsuariosDaSala(io: SocketIOServer, roomName: string): void {
+  io.to(roomName).emit("room:users", {
+    roomName,
+    users: listarUsuariosSala(roomName)
   });
 }
 
-async function lidarMovimento(
+function entrarOuCriarSala(
+  app: FastifyInstance,
   io: SocketIOServer,
-  context: ContextoSocket,
+  socket: Socket,
   payload: unknown,
-  confirmacao?: ConfirmacaoSocket
-): Promise<void> {
-  const parsedMove = validarPayloadMovimento(payload);
-  if (!parsedMove.ok) {
-    responderErro(confirmacao, parsedMove.errors.join(" | "));
+  confirmacao: ConfirmacaoSocket | undefined,
+  acao: "create" | "join"
+): void {
+  const parsedRoom = validarPayloadSala(payload);
+  if (!parsedRoom.ok) {
+    responder(confirmacao, false, parsedRoom.errors.join(" | "));
     return;
   }
 
-  try {
-    const character = await prisma.character.findUnique({
-      where: { id: context.characterId },
-      select: { id: true, x: true, y: true }
-    });
-
-    if (!character) {
-      responderErro(confirmacao, "Personagem nao encontrado.");
-      return;
-    }
-
-    const nextPosition = calcularProximaPosicao(parsedMove.data.direction, character.x, character.y);
-    const moved = nextPosition.x !== character.x || nextPosition.y !== character.y;
-
-    if (moved) {
-      await prisma.character.update({
-        where: { id: character.id },
-        data: { x: nextPosition.x, y: nextPosition.y }
-      });
-      await transmitirMundo(io);
-    }
-
-    responderSucesso(confirmacao);
-  } catch {
-    responderErro(confirmacao, "Falha ao mover o personagem.");
-  }
-}
-
-async function lidarAtaque(
-  io: SocketIOServer,
-  context: ContextoSocket,
-  payload: unknown,
-  confirmacao?: ConfirmacaoSocket
-): Promise<void> {
-  const parsedAttack = validarPayloadAtaque(payload);
-  if (!parsedAttack.ok) {
-    responderErro(confirmacao, parsedAttack.errors.join(" | "));
+  const roomName = parsedRoom.data.roomName;
+  const resultado = entrarNaSala(socket.id, roomName);
+  if (!resultado) {
+    responder(confirmacao, false, "Sessao de usuario invalida.");
     return;
   }
 
-  try {
-    const attacker = await prisma.character.findUnique({
-      where: { id: context.characterId }
-    });
-
-    if (!attacker) {
-      responderErro(confirmacao, "Personagem nao encontrado.");
-      return;
-    }
-
-    const candidateIds = [...idsPersonagensOnline].filter((id) => id !== context.characterId);
-    if (candidateIds.length === 0) {
-      responderErro(confirmacao, "Nenhum alvo online.");
-      return;
-    }
-
-    const targets = await prisma.character.findMany({
-      where: {
-        id: {
-          in: candidateIds
-        }
-      }
-    });
-
-    const targetsInRange = targets.filter((target) => {
-      const distance = distanciaManhattan(attacker.x, attacker.y, target.x, target.y);
-      return target.hp > 0 && distance <= ATTACK_RANGE;
-    });
-
-    if (targetsInRange.length === 0) {
-      responderErro(confirmacao, "Nenhum alvo no alcance de ataque.");
-      return;
-    }
-
-    const selectedTarget = parsedAttack.data.targetId
-      ? targetsInRange.find((target) => target.id === parsedAttack.data.targetId)
-      : targetsInRange[0];
-
-    if (!selectedTarget) {
-      responderErro(confirmacao, "Alvo selecionado fora do alcance.");
-      return;
-    }
-
-    const nextHp = selectedTarget.hp - ATTACK_DAMAGE;
-    const defeated = nextHp <= 0;
-
-    if (defeated) {
-      await prisma.character.update({
-        where: { id: selectedTarget.id },
-        data: {
-          hp: selectedTarget.maxHp,
-          x: SPAWN_POSITION.x,
-          y: SPAWN_POSITION.y
-        }
-      });
-    } else {
-      await prisma.character.update({
-        where: { id: selectedTarget.id },
-        data: {
-          hp: nextHp
-        }
-      });
-    }
-
-    io.emit("combat:event", {
-      attackerId: attacker.id,
-      targetId: selectedTarget.id,
-      damage: ATTACK_DAMAGE,
-      defeated
-    });
-
-    await transmitirMundo(io);
-    responderSucesso(confirmacao);
-  } catch {
-    responderErro(confirmacao, "Falha ao executar ataque.");
+  if (resultado.leftRoomName) {
+    socket.leave(resultado.leftRoomName);
+    emitirUsuariosDaSala(io, resultado.leftRoomName);
   }
+
+  socket.join(roomName);
+  socket.emit("room:joined", {
+    roomName: resultado.roomName,
+    users: resultado.users,
+    messages: resultado.messages
+  });
+
+  emitirUsuariosDaSala(io, roomName);
+  emitirListaSalas(io);
+
+  const nickname = obterNicknamePorSocket(socket.id) ?? "anon";
+  app.log.info(`[room] @${nickname} ${acao === "create" ? "criou/entrou em" : "entrou em"} ${roomName}`);
+  responder(confirmacao, true);
 }
 
 export function registrarEventosSocket(app: FastifyInstance, io: SocketIOServer): void {
-  io.use(async (socket, next) => {
-    try {
-      const context = await resolverContextoSocket(app, socket);
-      socket.data.context = context;
-      next();
-    } catch {
-      next(new Error("Falha de autenticacao no socket."));
+  io.use((socket, next) => {
+    const parsedNickname = validarNicknameSocket(extrairNicknameHandshake(socket));
+    if (!parsedNickname.ok) {
+      next(new Error(parsedNickname.errors.join(" | ")));
+      return;
     }
+
+    const nickname = registrarUsuarioConectado(socket.id, parsedNickname.data);
+    socket.data.nickname = nickname;
+    next();
   });
 
   io.on("connection", (socket) => {
-    const context = socket.data.context as ContextoSocket;
-    idsPersonagensOnline.add(context.characterId);
+    const nickname = socket.data.nickname as string;
 
-    socket.emit("world:ready", {
-      mapSize: MAP_SIZE,
-      characterId: context.characterId
-    });
-    void transmitirMundo(io);
-
-    socket.on("player:move", async (payload: unknown, confirmacao?: ConfirmacaoSocket) => {
-      await lidarMovimento(io, context, payload, confirmacao);
+    socket.emit("session:ready", {
+      nickname,
+      rooms: listarSalas()
     });
 
-    socket.on("player:attack", async (payload: unknown, confirmacao?: ConfirmacaoSocket) => {
-      await lidarAtaque(io, context, payload, confirmacao);
+    emitirListaSalas(io);
+    app.log.info(`[socket] @${nickname} conectado.`);
+
+    socket.on("room:create", (payload: unknown, confirmacao?: ConfirmacaoSocket) => {
+      entrarOuCriarSala(app, io, socket, payload, confirmacao, "create");
     });
 
-    socket.on("disconnect", () => {
-      idsPersonagensOnline.delete(context.characterId);
-      void transmitirMundo(io);
+    socket.on("room:join", (payload: unknown, confirmacao?: ConfirmacaoSocket) => {
+      entrarOuCriarSala(app, io, socket, payload, confirmacao, "join");
+    });
+
+    socket.on("room:leave", (confirmacao?: ConfirmacaoSocket) => {
+      const resultado = sairDaSala(socket.id);
+      if (!resultado) {
+        responder(confirmacao, true);
+        return;
+      }
+
+      socket.leave(resultado.roomName);
+      socket.emit("room:left", {
+        roomName: resultado.roomName
+      });
+
+      emitirUsuariosDaSala(io, resultado.roomName);
+      emitirListaSalas(io);
+
+      const author = obterNicknamePorSocket(socket.id) ?? nickname;
+      app.log.info(`[room] @${author} saiu de ${resultado.roomName}`);
+      responder(confirmacao, true);
+    });
+
+    socket.on("chat:send", (payload: unknown, confirmacao?: ConfirmacaoSocket) => {
+      const parsedMessage = validarPayloadMensagemChat(payload);
+      if (!parsedMessage.ok) {
+        responder(confirmacao, false, parsedMessage.errors.join(" | "));
+        return;
+      }
+
+      const publicado = publicarMensagem(socket.id, parsedMessage.data.text);
+      if (!publicado) {
+        responder(confirmacao, false, "Entre em uma sala antes de enviar mensagens.");
+        return;
+      }
+
+      io.to(publicado.roomName).emit("chat:new-message", publicado);
+      const author = obterNicknamePorSocket(socket.id) ?? nickname;
+      app.log.info(`[chat][${publicado.roomName}] @${author}: ${parsedMessage.data.text}`);
+      responder(confirmacao, true);
+    });
+
+    socket.on("disconnect", (reason) => {
+      const removido = removerUsuarioConectado(socket.id);
+      if (!removido) {
+        return;
+      }
+
+      if (removido.roomName) {
+        emitirUsuariosDaSala(io, removido.roomName);
+      }
+      emitirListaSalas(io);
+      app.log.info(`[socket] @${removido.nickname} desconectou (${reason}).`);
     });
   });
 }
