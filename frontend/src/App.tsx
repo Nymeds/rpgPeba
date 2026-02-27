@@ -1,365 +1,306 @@
-import { type FormEvent, useEffect, useRef, useState } from "react";
-import type { Socket } from "socket.io-client";
+import { type FormEvent, useEffect, useMemo, useState } from "react";
 
-import { criarSocketChat } from "./socket";
-import type {
-  ChatMessage,
-  ClientToServerEvents,
-  RoomSummary,
-  ServerToClientEvents,
-  SocketAck
-} from "./types";
+import { autenticarConta, carregarSessao, criarPersonagem, registrarConta } from "./api";
+import GameCanvas from "./game/GameCanvas";
+import { useGameSocket } from "./game/useGameSocket";
+import type { Account, AuthResponse, Character } from "./types";
 
-type Screen = "login" | "lobby" | "room";
+type AuthMode = "login" | "register";
 
-function hora(iso: string): string {
-  return new Date(iso).toLocaleTimeString("pt-BR", {
-    hour: "2-digit",
-    minute: "2-digit"
-  });
+const TOKEN_KEY = "rpg-peba-jwt";
+
+function salvarToken(token: string): void {
+  localStorage.setItem(TOKEN_KEY, token);
 }
 
-export default function Aplicativo() {
-  const [screen, setScreen] = useState<Screen>("login");
-  const [status, setStatus] = useState("Digite um nickname e conecte.");
+function lerTokenSalvo(): string | null {
+  return localStorage.getItem(TOKEN_KEY);
+}
 
-  const [nicknameInput, setNicknameInput] = useState("");
-  const [nickname, setNickname] = useState("");
+function limparToken(): void {
+  localStorage.removeItem(TOKEN_KEY);
+}
 
-  const [roomInput, setRoomInput] = useState("");
-  const [rooms, setRooms] = useState<RoomSummary[]>([]);
+function statusSessao(account: Account | null, character: Character | null): string {
+  if (!account) {
+    return "Faça login para entrar no mundo.";
+  }
 
-  const [roomName, setRoomName] = useState("");
-  const [roomUsers, setRoomUsers] = useState<string[]>([]);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [messageInput, setMessageInput] = useState("");
+  if (!character) {
+    return `Conta @${account.username} ativa. Falta criar seu personagem.`;
+  }
 
-  const socketRef = useRef<Socket<ServerToClientEvents, ClientToServerEvents> | null>(null);
-  const roomNameRef = useRef("");
+  return `Logado como @${account.username} com ${character.name}.`;
+}
+
+export default function App() {
+  const [token, setToken] = useState<string | null>(() => lerTokenSalvo());
+  const [account, setAccount] = useState<Account | null>(null);
+  const [character, setCharacter] = useState<Character | null>(null);
+  const [sessionBooting, setSessionBooting] = useState<boolean>(Boolean(lerTokenSalvo()));
+
+  const [authMode, setAuthMode] = useState<AuthMode>("login");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [characterName, setCharacterName] = useState("");
+
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState("Pronto para conectar.");
 
   useEffect(() => {
-    roomNameRef.current = roomName;
-  }, [roomName]);
+    let active = true;
 
-  useEffect(() => {
+    async function restoreSession() {
+      if (!token) {
+        if (!active) {
+          return;
+        }
+        setSessionBooting(false);
+        setAccount(null);
+        setCharacter(null);
+        setNotice("Faça login para entrar no mundo.");
+        return;
+      }
+
+      setSessionBooting(true);
+      setNotice("Validando JWT salvo...");
+
+      try {
+        const response = await carregarSessao(token);
+        if (!active) {
+          return;
+        }
+        setAccount(response.account);
+        setCharacter(response.character);
+        setNotice(statusSessao(response.account, response.character));
+      } catch (error) {
+        if (!active) {
+          return;
+        }
+        console.error(error);
+        limparToken();
+        setToken(null);
+        setAccount(null);
+        setCharacter(null);
+        setNotice("Sessão expirada. Faça login novamente.");
+      } finally {
+        if (active) {
+          setSessionBooting(false);
+        }
+      }
+    }
+
+    void restoreSession();
     return () => {
-      if (socketRef.current) {
-        socketRef.current.removeAllListeners();
-        socketRef.current.disconnect();
-        socketRef.current = null;
-      }
+      active = false;
     };
-  }, []);
+  }, [token]);
 
-  const limparSalaAtual = () => {
-    setRoomName("");
-    setRoomUsers([]);
-    setMessages([]);
-    setMessageInput("");
-  };
+  const socketEnabled = Boolean(token && character);
+  const gameSocket = useGameSocket(token, socketEnabled);
+  const selfPlayerId = gameSocket.session?.playerId ?? character?.id ?? null;
 
-  const fecharSocketAtual = () => {
-    if (!socketRef.current) {
-      return;
+  const socketStatusLabel = useMemo(() => {
+    if (!socketEnabled) {
+      return "socket inativo";
     }
-    socketRef.current.removeAllListeners();
-    socketRef.current.disconnect();
-    socketRef.current = null;
-  };
+    if (gameSocket.status === "connecting") {
+      return "socket conectando";
+    }
+    if (gameSocket.status === "connected") {
+      return "socket online";
+    }
+    if (gameSocket.status === "error") {
+      return "socket com erro";
+    }
+    return "socket aguardando";
+  }, [gameSocket.status, socketEnabled]);
 
-  const desconectarTudo = () => {
-    fecharSocketAtual();
-    setScreen("login");
-    setNickname("");
-    setRooms([]);
-    limparSalaAtual();
-    setStatus("Desconectado.");
-  };
+  function aplicarRespostaAuth(response: AuthResponse): void {
+    salvarToken(response.token);
+    setToken(response.token);
+    setAccount(response.account);
+    setCharacter(response.character);
+    setNotice(statusSessao(response.account, response.character));
+  }
 
-  const conectar = (event: FormEvent<HTMLFormElement>) => {
+  async function onSubmitAuth(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
-    const nome = nicknameInput.trim();
 
-    if (!nome) {
-      setStatus("Digite um nickname valido.");
+    if (!username.trim() || !password.trim()) {
+      setNotice("Preencha usuário e senha.");
       return;
     }
 
-    fecharSocketAtual();
-    limparSalaAtual();
-    setRooms([]);
-    setStatus("Conectando no servidor...");
+    setBusy(true);
+    setNotice(authMode === "login" ? "Autenticando conta..." : "Criando conta...");
 
-    const socket = criarSocketChat(nome);
-    socketRef.current = socket;
+    try {
+      const credentials = {
+        username: username.trim(),
+        password
+      };
 
-    socket.on("session:ready", (payload) => {
-      setNickname(payload.nickname);
-      setRooms(payload.rooms);
-      setScreen("lobby");
-      setStatus(`Logado como @${payload.nickname}. Escolha uma sala.`);
-      console.log(`[CLIENT] sessao pronta @${payload.nickname}`);
-    });
+      const response =
+        authMode === "login" ? await autenticarConta(credentials) : await registrarConta(credentials);
 
-    socket.on("room:list", (payload) => {
-      setRooms(payload.rooms);
-      console.log(`[CLIENT] salas atualizadas: ${payload.rooms.map((room) => room.name).join(", ")}`);
-    });
+      aplicarRespostaAuth(response);
+      setPassword("");
+    } catch (error) {
+      console.error(error);
+      setNotice(error instanceof Error ? error.message : "Falha de autenticação.");
+    } finally {
+      setBusy(false);
+    }
+  }
 
-    socket.on("room:joined", (payload) => {
-      setRoomName(payload.roomName);
-      setRoomUsers(payload.users);
-      setMessages(payload.messages);
-      setScreen("room");
-      setStatus(`Voce entrou na sala ${payload.roomName}.`);
-      console.log(`[CLIENT] entrou em ${payload.roomName}`);
-    });
-
-    socket.on("room:left", (payload) => {
-      if (payload.roomName === roomNameRef.current) {
-        limparSalaAtual();
-      }
-      setScreen("lobby");
-      setStatus(`Voce saiu da sala ${payload.roomName}.`);
-      console.log(`[CLIENT] saiu de ${payload.roomName}`);
-    });
-
-    socket.on("room:users", (payload) => {
-      if (payload.roomName !== roomNameRef.current) {
-        return;
-      }
-      setRoomUsers(payload.users);
-    });
-
-    socket.on("chat:new-message", (payload) => {
-      if (payload.roomName !== roomNameRef.current) {
-        return;
-      }
-      setMessages((atual) => [...atual, payload.message]);
-      console.log(`[CLIENT][${payload.roomName}] @${payload.message.author}: ${payload.message.text}`);
-    });
-
-    socket.on("connect_error", (error) => {
-      setScreen("login");
-      setStatus(`Falha na conexao: ${error.message}`);
-      setNickname("");
-      limparSalaAtual();
-      setRooms([]);
-      console.error("[CLIENT] connect_error", error);
-    });
-
-    socket.on("disconnect", (reason) => {
-      if (socketRef.current === socket) {
-        socketRef.current = null;
-      }
-      setScreen("login");
-      setNickname("");
-      setRooms([]);
-      limparSalaAtual();
-      setStatus(`Conexao encerrada (${reason}).`);
-      console.warn(`[CLIENT] disconnect: ${reason}`);
-    });
-  };
-
-  const criarSala = (event: FormEvent<HTMLFormElement>) => {
+  async function onSubmitCharacter(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
-    const socket = socketRef.current;
-    const roomNameCandidate = roomInput.trim();
 
-    if (!socket) {
-      setStatus("Conecte primeiro.");
-      return;
-    }
-    if (!roomNameCandidate) {
-      setStatus("Digite o nome da sala.");
+    if (!token) {
+      setNotice("Token ausente. Faça login novamente.");
       return;
     }
 
-    const ack: SocketAck = (response) => {
-      if (!response.ok) {
-        setStatus(response.error ?? "Falha ao criar sala.");
-      }
-    };
-
-    socket.emit("room:create", { roomName: roomNameCandidate }, ack);
-    setRoomInput("");
-  };
-
-  const entrarSala = (roomNameAlvo: string) => {
-    const socket = socketRef.current;
-    if (!socket) {
-      setStatus("Conecte primeiro.");
+    if (!characterName.trim()) {
+      setNotice("Digite o nome do personagem.");
       return;
     }
 
-    const ack: SocketAck = (response) => {
-      if (!response.ok) {
-        setStatus(response.error ?? "Falha ao entrar na sala.");
-      }
-    };
+    setBusy(true);
+    setNotice("Criando personagem...");
 
-    socket.emit("room:join", { roomName: roomNameAlvo }, ack);
-  };
-
-  const sairSala = () => {
-    const socket = socketRef.current;
-    if (!socket) {
-      return;
+    try {
+      const response = await criarPersonagem(token, characterName.trim());
+      setCharacter(response.character);
+      setCharacterName("");
+      setNotice(statusSessao(account, response.character));
+    } catch (error) {
+      console.error(error);
+      setNotice(error instanceof Error ? error.message : "Falha ao criar personagem.");
+    } finally {
+      setBusy(false);
     }
+  }
 
-    const ack: SocketAck = (response) => {
-      if (!response.ok) {
-        setStatus(response.error ?? "Falha ao sair da sala.");
-      }
-    };
-
-    socket.emit("room:leave", ack);
-  };
-
-  const enviarMensagem = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const socket = socketRef.current;
-    const texto = messageInput.trim();
-
-    if (!socket) {
-      setStatus("Conecte primeiro.");
-      return;
-    }
-    if (!texto) {
-      setStatus("Digite uma mensagem.");
-      return;
-    }
-
-    const ack: SocketAck = (response) => {
-      if (!response.ok) {
-        setStatus(response.error ?? "Falha ao enviar mensagem.");
-      }
-    };
-
-    socket.emit("chat:send", { text: texto }, ack);
-    setMessageInput("");
-  };
+  function logout(): void {
+    limparToken();
+    setToken(null);
+    setAccount(null);
+    setCharacter(null);
+    setUsername("");
+    setPassword("");
+    setCharacterName("");
+    setNotice("Logout feito.");
+  }
 
   return (
-    <div className="app">
-      <header className="top-bar">
-        <h1>dark_room chat</h1>
-        <small>{status}</small>
+    <div className="app-shell">
+      <header className="hero">
+        <p className="eyebrow">RPG Peba MMO Prototype</p>
+        <h1>Mapa em tempo real com JWT + Socket.IO</h1>
+        <div className="status-bar">
+          <span>{notice}</span>
+          <span>{socketStatusLabel}</span>
+        </div>
       </header>
 
-      {screen === "login" ? (
-        <section className="panel auth-panel">
-          <h2>login</h2>
-          <form onSubmit={conectar}>
-            <label htmlFor="nickname">nickname</label>
-            <input
-              id="nickname"
-              value={nicknameInput}
-              onChange={(event) => setNicknameInput(event.target.value)}
-              placeholder="ex.: anon_47"
-              autoComplete="off"
-            />
-            <button type="submit" className="btn-primary">
-              entrar
-            </button>
-          </form>
+      {sessionBooting ? (
+        <section className="panel card-center">
+          <h2>Restaurando sessão</h2>
+          <p>Validando token salvo e buscando seus dados...</p>
         </section>
       ) : null}
 
-      {screen === "lobby" ? (
-        <main className="lobby">
-          <section className="panel">
-            <h2>lobby</h2>
-            <p>logado como @{nickname}</p>
+      {!sessionBooting && !token ? (
+        <section className="panel card-center">
+          <h2>{authMode === "login" ? "Entrar na conta" : "Criar conta"}</h2>
+          <form onSubmit={onSubmitAuth} className="stack-form">
+            <label htmlFor="username">Usuário</label>
+            <input
+              id="username"
+              value={username}
+              onChange={(event) => setUsername(event.target.value)}
+              placeholder="ex.: peba_warrior"
+              autoComplete="username"
+            />
 
-            <form onSubmit={criarSala} className="inline-form">
-              <input
-                value={roomInput}
-                onChange={(event) => setRoomInput(event.target.value)}
-                placeholder="nome da sala"
-                autoComplete="off"
-              />
-              <button type="submit" className="btn-primary">
-                criar sala
-              </button>
-            </form>
-          </section>
+            <label htmlFor="password">Senha</label>
+            <input
+              id="password"
+              value={password}
+              type="password"
+              onChange={(event) => setPassword(event.target.value)}
+              placeholder="minimo 6 caracteres"
+              autoComplete={authMode === "login" ? "current-password" : "new-password"}
+            />
 
-          <section className="panel">
-            <h2>salas abertas</h2>
-            <ul className="rooms-list">
-              {rooms.length === 0 ? <li>nenhuma sala no momento.</li> : null}
-              {rooms.map((room) => (
-                <li key={room.name}>
-                  <span>
-                    #{room.name} ({room.usersCount} online)
-                  </span>
-                  <button type="button" className="btn-ghost" onClick={() => entrarSala(room.name)}>
-                    entrar
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </section>
-
-          <section className="panel actions">
-            <button type="button" className="btn-ghost" onClick={desconectarTudo}>
-              sair da conta
+            <button type="submit" disabled={busy} className="btn-primary">
+              {busy ? "Aguarde..." : authMode === "login" ? "Entrar" : "Registrar"}
             </button>
-          </section>
-        </main>
+          </form>
+
+          <button
+            type="button"
+            className="btn-link"
+            onClick={() => setAuthMode((mode) => (mode === "login" ? "register" : "login"))}
+          >
+            {authMode === "login" ? "Não tem conta? Registrar" : "Já tem conta? Fazer login"}
+          </button>
+        </section>
       ) : null}
 
-      {screen === "room" ? (
-        <main className="room-layout">
-          <section className="panel chat-panel">
-            <div className="chat-header">
-              <h2>sala #{roomName}</h2>
-              <div className="chat-actions">
-                <button type="button" className="btn-ghost" onClick={sairSala}>
-                  voltar ao lobby
-                </button>
-                <button type="button" className="btn-ghost" onClick={desconectarTudo}>
-                  logout
-                </button>
-              </div>
-            </div>
+      {!sessionBooting && token && !character ? (
+        <section className="panel card-center">
+          <h2>Criar personagem</h2>
+          <p>Uma conta só pode ter um personagem neste protótipo.</p>
 
-            <ul className="messages">
-              {messages.length === 0 ? <li>sem mensagens ainda.</li> : null}
-              {messages.map((message) => (
-                <li key={message.id}>
-                  <div className="meta">
-                    <strong>@{message.author}</strong>
-                    <span>{hora(message.createdAt)}</span>
-                  </div>
-                  <p>{message.text}</p>
-                </li>
-              ))}
-            </ul>
+          <form onSubmit={onSubmitCharacter} className="stack-form">
+            <label htmlFor="charName">Nome do personagem</label>
+            <input
+              id="charName"
+              value={characterName}
+              onChange={(event) => setCharacterName(event.target.value)}
+              placeholder="ex.: Guerreiro Peba"
+              autoComplete="off"
+            />
 
-            <form onSubmit={enviarMensagem} className="inline-form">
-              <input
-                value={messageInput}
-                onChange={(event) => setMessageInput(event.target.value)}
-                placeholder="digite sua mensagem..."
-                autoComplete="off"
-              />
-              <button type="submit" className="btn-primary">
-                enviar
-              </button>
-            </form>
+            <button type="submit" disabled={busy} className="btn-primary">
+              {busy ? "Criando..." : "Criar personagem"}
+            </button>
+          </form>
+
+          <button type="button" className="btn-ghost" onClick={logout}>
+            Sair da conta
+          </button>
+        </section>
+      ) : null}
+
+      {!sessionBooting && token && character ? (
+        <main className="game-layout">
+          <section className="panel info-panel">
+            <h2>Jogador</h2>
+            <p>
+              <strong>Conta:</strong> @{account?.username}
+            </p>
+            <p>
+              <strong>Personagem:</strong> {character.name}
+            </p>
+            <p>
+              <strong>HP:</strong> {character.hp}/{character.maxHp}
+            </p>
+            <p>
+              <strong>Instruções:</strong> WASD ou setas para andar.
+            </p>
+            <button type="button" className="btn-ghost" onClick={logout}>
+              Logout
+            </button>
+            {gameSocket.error ? <small className="error-text">Socket: {gameSocket.error}</small> : null}
           </section>
 
-          <aside className="panel users-panel">
-            <h2>online ({roomUsers.length})</h2>
-            <ul className="users-list">
-              {roomUsers.length === 0 ? <li>carregando...</li> : null}
-              {roomUsers.map((user) => (
-                <li key={user}>@{user}</li>
-              ))}
-            </ul>
-          </aside>
+          <section className="game-stage">
+            <GameCanvas world={gameSocket.world} selfPlayerId={selfPlayerId} onMove={gameSocket.sendMove} />
+          </section>
         </main>
       ) : null}
     </div>

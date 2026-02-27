@@ -8,7 +8,8 @@ import { prisma } from "../db.js";
 
 // Tecnico: Constantes e normalizador de inventario.
 // Crianca: Regras do mapa e organizacao da mochila.
-import { MAP_SIZE, normalizarInventario } from "../game.js";
+import { MAP_SIZE, paraJogadorPublico } from "../game.js";
+import { listOnlineCharacterIds } from "../realtime/world.js";
 
 export const rotasMundo: FastifyPluginAsync = async (app) => {
   app.get("/api/world/state", async (_request, reply) => {
@@ -25,21 +26,13 @@ export const rotasMundo: FastifyPluginAsync = async (app) => {
         inventory: true
       }
     });
+    const onlineCharacterIds = listOnlineCharacterIds();
 
-    // Tecnico: Esta rota nao rastreia online/offline em tempo real, entao online=false.
-    // Crianca: Aqui e so uma foto do mundo; quem esta online de verdade vem pelo socket.
     return reply.send({
       mapSize: MAP_SIZE,
-      players: characters.map((character) => ({
-        id: character.id,
-        name: character.name,
-        x: character.x,
-        y: character.y,
-        hp: character.hp,
-        maxHp: character.maxHp,
-        inventory: normalizarInventario(character.inventory),
-        online: false
-      }))
+      players: characters.map((character: (typeof characters)[number]) =>
+        paraJogadorPublico(character, onlineCharacterIds)
+      )
     });
   });
 };

@@ -1,9 +1,12 @@
 import cors from "@fastify/cors";
+import jwt from "@fastify/jwt";
 import Fastify from "fastify";
 import { Server as SocketIOServer } from "socket.io";
 
 import { env, origemPermitida } from "./env.js";
-import { listarSalas } from "./socialState.js";
+import { rotasAutenticacao } from "./routes/auth.js";
+import { rotasPersonagem } from "./routes/character.js";
+import { rotasMundo } from "./routes/world.js";
 import { registrarEventosSocket } from "./socket.js";
 
 async function criarServidor() {
@@ -18,15 +21,29 @@ async function criarServidor() {
     credentials: true
   });
 
+  await app.register(jwt, {
+    secret: env.JWT_SECRET
+  });
+
+  app.decorate("authenticate", async (request, reply) => {
+    try {
+      await request.jwtVerify();
+    } catch {
+      return reply.status(401).send({
+        error: "Token JWT invalido ou ausente."
+      });
+    }
+  });
+
   app.get("/health", async () => ({
     status: "ok",
-    app: "dark-room-chat",
+    app: "rpg-peba-mmo",
     timestamp: new Date().toISOString()
   }));
 
-  app.get("/api/rooms", async () => ({
-    rooms: listarSalas()
-  }));
+  await app.register(rotasAutenticacao);
+  await app.register(rotasPersonagem);
+  await app.register(rotasMundo);
 
   const io = new SocketIOServer(app.server, {
     cors: {
@@ -59,7 +76,7 @@ async function iniciarServidor() {
       host: "0.0.0.0",
       port: env.PORT
     });
-    app.log.info(`[server] HTTP + Socket.IO rodando em http://localhost:${env.PORT}`);
+    app.log.info(`[server] MMO HTTP + Socket.IO rodando em http://localhost:${env.PORT}`);
   } catch (error) {
     app.log.error(error);
     process.exit(1);

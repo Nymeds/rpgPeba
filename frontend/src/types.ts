@@ -1,45 +1,58 @@
-export type RoomSummary = {
-  name: string;
-  usersCount: number;
+export type Direction = "up" | "down" | "left" | "right";
+
+export type InventorySlot = string | null;
+
+export type Account = {
+  id: number;
+  username: string;
 };
 
-export type ChatMessage = {
+export type Character = {
   id: number;
-  author: string;
-  text: string;
-  createdAt: string;
+  name: string;
+  x: number;
+  y: number;
+  hp: number;
+  maxHp: number;
+  inventory: InventorySlot[];
+};
+
+export type AuthResponse = {
+  token: string;
+  account: Account;
+  character: Character | null;
+};
+
+export type PublicPlayer = {
+  id: number;
+  name: string;
+  x: number;
+  y: number;
+  hp: number;
+  maxHp: number;
+  inventory: InventorySlot[];
+  online: boolean;
+};
+
+export type WorldUpdatePayload = {
+  mapSize: number;
+  tick: number;
+  players: PublicPlayer[];
 };
 
 export type SessionReadyPayload = {
-  nickname: string;
-  rooms: RoomSummary[];
-};
-
-export type RoomJoinedPayload = {
-  roomName: string;
-  users: string[];
-  messages: ChatMessage[];
-};
-
-export type ChatMessagePayload = {
-  roomName: string;
-  message: ChatMessage;
+  playerId: number;
+  playerName: string;
+  mapSize: number;
 };
 
 export type SocketAck = (response: { ok: boolean; error?: string }) => void;
 
 export type ServerToClientEvents = {
   "session:ready": (payload: SessionReadyPayload) => void;
-  "room:list": (payload: { rooms: RoomSummary[] }) => void;
-  "room:joined": (payload: RoomJoinedPayload) => void;
-  "room:left": (payload: { roomName: string }) => void;
-  "room:users": (payload: { roomName: string; users: string[] }) => void;
-  "chat:new-message": (payload: ChatMessagePayload) => void;
+  "world:update": (payload: WorldUpdatePayload) => void;
 };
 
 export type ClientToServerEvents = {
-  "room:create": (payload: { roomName: string }, ack?: SocketAck) => void;
-  "room:join": (payload: { roomName: string }, ack?: SocketAck) => void;
-  "room:leave": (ack?: SocketAck) => void;
-  "chat:send": (payload: { text: string }, ack?: SocketAck) => void;
+  "player:move": (payload: { direction: Direction | null }, ack?: SocketAck) => void;
 };

@@ -55,9 +55,11 @@ const inventoryUpdateBodySchema = z.object({
 // Tecnico: Schema de movimento via socket.
 // Crianca: Direcao que o jogador quer andar.
 const movePayloadSchema = z.object({
-  direction: z.enum(["up", "down", "left", "right"], {
-    errorMap: () => ({ message: "direction: use up, down, left ou right." })
-  })
+  direction: z
+    .enum(["up", "down", "left", "right"], {
+      errorMap: () => ({ message: "direction: use up, down, left ou right." })
+    })
+    .nullable()
 });
 
 // Tecnico: Schema de ataque via socket.

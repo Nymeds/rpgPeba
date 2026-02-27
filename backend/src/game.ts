@@ -1,6 +1,6 @@
-// Tecnico: Tamanho do mapa quadrado (20 x 20).
-// Crianca: O chao do jogo tem 20 bloquinhos para cada lado.
-export const MAP_SIZE = 20;
+// Tecnico: Tamanho do mapa quadrado (80 x 80).
+// Crianca: O chao do jogo tem 80 bloquinhos para cada lado.
+export const MAP_SIZE = 80;
 
 // Tecnico: Quantidade fixa de slots do inventario.
 // Crianca: A mochila tem 6 espacinhos.
@@ -8,7 +8,7 @@ export const INVENTORY_SLOTS = 6;
 
 // Tecnico: Posicao padrao onde personagens nascem ou reaparecem.
 // Crianca: Ponto de comeco do jogador.
-export const SPAWN_POSITION = { x: 10, y: 10 };
+export const SPAWN_POSITION = { x: 40, y: 40 };
 
 // Tecnico: Modelo enxuto enviado para o cliente renderizar cada jogador.
 // Crianca: Ficha simples de cada jogador para desenhar no mapa.

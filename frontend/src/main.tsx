@@ -7,8 +7,8 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 
 // Tecnico: Componente principal da aplicacao.
-// Crianca: Tela principal da rede social fake.
-import Aplicativo from "./App";
+// Crianca: Tela principal do prototipo MMO.
+import App from "./App";
 
 // Tecnico: Estilos globais.
 // Crianca: Roupas e cores da interface.
@@ -18,6 +18,6 @@ import "./styles.css";
 // Crianca: Coloca o app dentro da caixa principal da pagina.
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <Aplicativo />
+    <App />
   </React.StrictMode>
 );
