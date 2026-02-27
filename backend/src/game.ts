@@ -10,6 +10,12 @@ export const INVENTORY_SLOTS = 6;
 // Crianca: Ponto de comeco do jogador.
 export const SPAWN_POSITION = { x: 40, y: 40 };
 
+export enum PlayerType {
+  WARRIOR = "WARRIOR",
+  MAGE = "MAGE",
+  ARCHER = "ARCHER"
+}
+
 // Tecnico: Modelo enxuto enviado para o cliente renderizar cada jogador.
 // Crianca: Ficha simples de cada jogador para desenhar no mapa.
 export type PublicPlayer = {
@@ -21,6 +27,16 @@ export type PublicPlayer = {
   maxHp: number;
   inventory: Array<string | null>;
   online: boolean;
+  playerType: PlayerType;
+};
+
+export type PublicAttack = {
+  id: number;
+  ownerId: number;
+  x: number;
+  y: number;
+  size: number;
+  expiresAt: number;
 };
 
 // Tecnico: Tipo interno esperado para transformar um Character do banco em PublicPlayer.
@@ -96,7 +112,8 @@ export function paraJogadorPublico(character: PersonagemParaVisaoPublica, online
     hp: character.hp,
     maxHp: character.maxHp,
     inventory: normalizarInventario(character.inventory),
-    online: onlineIds.has(character.id)
+    online: onlineIds.has(character.id),
+    playerType: PlayerType.WARRIOR
   };
 }
 

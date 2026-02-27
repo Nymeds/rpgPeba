@@ -30,6 +30,7 @@ export const rotasMundo: FastifyPluginAsync = async (app) => {
 
     return reply.send({
       mapSize: MAP_SIZE,
+      attacks: [],
       players: characters.map((character: (typeof characters)[number]) =>
         paraJogadorPublico(character, onlineCharacterIds)
       )

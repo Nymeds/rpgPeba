@@ -12,7 +12,7 @@ import { prisma } from "../db.js";
 
 // Tecnico: Normaliza inventario do banco para formato fixo no retorno.
 // Crianca: Arruma a mochila antes de mostrar no app.
-import { normalizarInventario } from "../game.js";
+import { PlayerType, normalizarInventario } from "../game.js";
 
 // Tecnico: Validacoes de entrada (implementadas com Zod por baixo).
 // Crianca: Regras para conferir formulario.
@@ -69,10 +69,11 @@ function montarRespostaAutenticacao(app: FastifyInstance, account: AccountWithCh
         x: account.character.x,
         y: account.character.y,
         hp: account.character.hp,
-        maxHp: account.character.maxHp,
-        inventory: normalizarInventario(account.character.inventory)
-      }
-    : null;
+      maxHp: account.character.maxHp,
+      inventory: normalizarInventario(account.character.inventory),
+      playerType: PlayerType.WARRIOR
+    }
+  : null;
 
   // Tecnico: Retorno padrao da camada de autenticacao.
   // Crianca: Entrega cracha + dados basicos da conta e do heroi.

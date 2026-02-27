@@ -4,6 +4,7 @@ import Fastify from "fastify";
 import { Server as SocketIOServer } from "socket.io";
 
 import { env, origemPermitida } from "./env.js";
+import { logError, logInfo } from "./logger.js";
 import { rotasAutenticacao } from "./routes/auth.js";
 import { rotasPersonagem } from "./routes/character.js";
 import { rotasMundo } from "./routes/world.js";
@@ -11,7 +12,7 @@ import { registrarEventosSocket } from "./socket.js";
 
 async function criarServidor() {
   const app = Fastify({
-    logger: true
+    logger: false
   });
 
   await app.register(cors, {
@@ -62,7 +63,7 @@ async function iniciarServidor() {
   const { app, io } = await criarServidor();
 
   const encerrarServidor = async () => {
-    app.log.info("[server] Encerrando...");
+    logInfo("SERVER", "Encerrando aplicacao");
     await io.close();
     await app.close();
     process.exit(0);
@@ -76,9 +77,13 @@ async function iniciarServidor() {
       host: "0.0.0.0",
       port: env.PORT
     });
-    app.log.info(`[server] MMO HTTP + Socket.IO rodando em http://localhost:${env.PORT}`);
+    logInfo("SERVER", "HTTP + Socket.IO online", {
+      url: `http://localhost:${env.PORT}`
+    });
   } catch (error) {
-    app.log.error(error);
+    logError("SERVER", "Falha ao iniciar", {
+      error: error instanceof Error ? error.message : "erro desconhecido"
+    });
     process.exit(1);
   }
 }

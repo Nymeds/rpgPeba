@@ -8,7 +8,7 @@ import { prisma } from "../db.js";
 
 // Tecnico: Regras do jogo e funcoes de inventario.
 // Crianca: Pecas que ajudam a criar o personagem e mochila.
-import { INVENTORY_SLOTS, normalizarInventario, serializarInventario, SPAWN_POSITION } from "../game.js";
+import { INVENTORY_SLOTS, PlayerType, normalizarInventario, serializarInventario, SPAWN_POSITION } from "../game.js";
 
 // Tecnico: Validadores (com Zod por baixo) para manter o fluxo limpo.
 // Crianca: Regras do heroi e da mochila.
@@ -88,7 +88,8 @@ export const rotasPersonagem: FastifyPluginAsync = async (app) => {
       return reply.status(201).send({
         character: {
           ...createdCharacter,
-          inventory: normalizarInventario(createdCharacter.inventory)
+          inventory: normalizarInventario(createdCharacter.inventory),
+          playerType: PlayerType.WARRIOR
         }
       });
     }
@@ -118,7 +119,8 @@ export const rotasPersonagem: FastifyPluginAsync = async (app) => {
       return reply.send({
         character: {
           ...character,
-          inventory: normalizarInventario(character.inventory)
+          inventory: normalizarInventario(character.inventory),
+          playerType: PlayerType.WARRIOR
         }
       });
     }
@@ -176,7 +178,8 @@ export const rotasPersonagem: FastifyPluginAsync = async (app) => {
       return reply.send({
         character: {
           ...updatedCharacter,
-          inventory: normalizarInventario(updatedCharacter.inventory)
+          inventory: normalizarInventario(updatedCharacter.inventory),
+          playerType: PlayerType.WARRIOR
         }
       });
     }

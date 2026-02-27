@@ -55,17 +55,16 @@ const inventoryUpdateBodySchema = z.object({
 // Tecnico: Schema de movimento via socket.
 // Crianca: Direcao que o jogador quer andar.
 const movePayloadSchema = z.object({
-  direction: z
-    .enum(["up", "down", "left", "right"], {
-      errorMap: () => ({ message: "direction: use up, down, left ou right." })
-    })
-    .nullable()
+  x: z.number().min(-1, "x: minimo -1.").max(1, "x: maximo 1."),
+  y: z.number().min(-1, "y: minimo -1.").max(1, "y: maximo 1.")
 });
 
-// Tecnico: Schema de ataque via socket.
-// Crianca: Alvo opcional para bater.
+// Tecnico: Schema de ataque via socket (evento "atack").
+// Crianca: Cliente manda sua posicao e alcance (padrao 2) para fins didaticos.
 const attackPayloadSchema = z.object({
-  targetId: z.number().int("targetId: use inteiro.").positive("targetId: use inteiro positivo.").optional()
+  x: z.number().optional(),
+  y: z.number().optional(),
+  range: z.number().int("range: use inteiro.").min(1, "range: minimo 1.").max(6, "range: maximo 6.").optional()
 });
 
 // Tecnico: Tipos inferidos automaticamente do schema.
@@ -123,7 +122,7 @@ export function validarPayloadMovimento(payload: unknown): ValidationResult<Move
 }
 
 export function validarPayloadAtaque(payload: unknown): ValidationResult<AttackPayload> {
-  // Tecnico: Nulo/undefined vira objeto vazio para manter ataque sem alvo.
-  // Crianca: Se nao enviar nada, considera ataque normal sem escolher inimigo.
+  // Tecnico: Nulo/undefined vira objeto vazio para usar alcance padrao depois.
+  // Crianca: Se nao mandar nada, o backend assume ataque basico.
   return validarComSchema(attackPayloadSchema, payload ?? {});
 }

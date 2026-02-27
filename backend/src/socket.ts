@@ -2,14 +2,16 @@ import type { FastifyInstance } from "fastify";
 import { Server as SocketIOServer, type Socket } from "socket.io";
 
 import { prisma } from "./db.js";
-import { MAP_SIZE, normalizarInventario } from "./game.js";
-import { validarPayloadMovimento } from "./schemas.js";
+import { MAP_SIZE, PlayerType, normalizarInventario } from "./game.js";
+import { logError, logInfo, logWarn } from "./logger.js";
+import { validarPayloadAtaque, validarPayloadMovimento } from "./schemas.js";
 import { emitWorldUpdate, startGameLoop } from "./realtime/gameLoop.js";
 import type { SessionReadyPayload, SocketAck } from "./realtime/types.js";
 import {
-  collectDirtyPositions,
+  collectDirtyStates,
+  createPlayerAttack,
   getSocketIdByCharacterId,
-  markPositionsAsDirty,
+  markPlayersAsDirty,
   registerOnlinePlayer,
   removeOnlinePlayer,
   setPlayerInput
@@ -31,6 +33,8 @@ type SocketSession = {
   maxHp: number;
   inventory: Array<string | null>;
 };
+
+let realtimeJaInicializado = false;
 
 function responder(confirmacao: SocketAck | undefined, ok: boolean, error?: string): void {
   if (ok) {
@@ -56,28 +60,35 @@ function extrairTokenHandshake(socket: Socket): string | null {
 }
 
 async function persistirPosicoesPendentes(app: FastifyInstance, motivo: string): Promise<void> {
-  const dirtyPositions = collectDirtyPositions();
-  if (dirtyPositions.length === 0) {
+  const dirtyStates = collectDirtyStates();
+  if (dirtyStates.length === 0) {
     return;
   }
 
-  app.log.info(`[socket][persist] motivo=${motivo} salvando ${dirtyPositions.length} personagem(ns).`);
+  logInfo("DB", "Persistindo posicoes", {
+    reason: motivo,
+    players: dirtyStates.length
+  });
 
   try {
     await prisma.$transaction(
-      dirtyPositions.map((position) =>
+      dirtyStates.map((state) =>
         prisma.character.update({
-          where: { id: position.characterId },
+          where: { id: state.characterId },
           data: {
-            x: position.x,
-            y: position.y
+            x: state.x,
+            y: state.y,
+            hp: state.hp
           }
         })
       )
     );
   } catch (error) {
-    markPositionsAsDirty(dirtyPositions.map((position) => position.characterId));
-    app.log.error(error, "[socket][persist] falha ao salvar posicoes no banco; marcando novamente como dirty.");
+    markPlayersAsDirty(dirtyStates.map((state) => state.characterId));
+    logError("DB", "Falha ao persistir posicoes", {
+      reason: motivo,
+      error: error instanceof Error ? error.message : "erro desconhecido"
+    });
   }
 }
 
@@ -88,18 +99,31 @@ async function persistirPosicaoDesconexao(app: FastifyInstance, session: SocketS
   try {
     await prisma.character.update({
       where: { id: session.characterId },
-      data: { x, y }
+      data: { x, y, hp: session.hp }
     });
-    app.log.info(
-      `[socket][disconnect] posicao final salva para ${session.characterName} (${session.characterId}) em (${x}, ${y}).`
-    );
+    logInfo("DB", "Posicao final salva no disconnect", {
+      player: session.characterName,
+      charId: session.characterId,
+      x,
+      y
+    });
   } catch (error) {
-    app.log.error(error, "[socket][disconnect] falha ao persistir posicao final no banco.");
+    logError("DB", "Falha ao salvar posicao final", {
+      player: session.characterName,
+      charId: session.characterId,
+      error: error instanceof Error ? error.message : "erro desconhecido"
+    });
   }
 }
 
 export function registrarEventosSocket(app: FastifyInstance, io: SocketIOServer): void {
-  const stopGameLoop = startGameLoop(app, io);
+  if (realtimeJaInicializado) {
+    logWarn("SOCKET", "Realtime ja inicializado, ignorando segundo bootstrap");
+    return;
+  }
+  realtimeJaInicializado = true;
+
+  const stopGameLoop = startGameLoop(io);
   const persistInterval = setInterval(() => {
     void persistirPosicoesPendentes(app, "intervalo");
   }, 2000);
@@ -114,6 +138,7 @@ export function registrarEventosSocket(app: FastifyInstance, io: SocketIOServer)
     try {
       const token = extrairTokenHandshake(socket);
       if (!token) {
+        logWarn("AUTH", "Handshake sem token", { socket: socket.id });
         next(new Error("Token JWT ausente no handshake do socket."));
         return;
       }
@@ -139,6 +164,10 @@ export function registrarEventosSocket(app: FastifyInstance, io: SocketIOServer)
       });
 
       if (!account || !account.character) {
+        logWarn("AUTH", "Conta sem personagem no handshake", {
+          socket: socket.id,
+          accountId: payload.accountId
+        });
         next(new Error("Conta sem personagem. Crie um personagem antes de abrir o socket."));
         return;
       }
@@ -157,18 +186,18 @@ export function registrarEventosSocket(app: FastifyInstance, io: SocketIOServer)
 
       (socket.data as { session?: SocketSession }).session = session;
 
-      app.log.info(
-        [
-          "[socket][auth] handshake validado",
-          `socket=${socket.id}`,
-          `account=${session.username}(${session.accountId})`,
-          `character=${session.characterName}(${session.characterId})`
-        ].join(" | ")
-      );
+      logInfo("AUTH", "Socket autenticado", {
+        socket: socket.id,
+        account: `${session.username}(${session.accountId})`,
+        character: `${session.characterName}(${session.characterId})`
+      });
 
       next();
     } catch (error) {
-      app.log.warn(error, "[socket][auth] rejeitando socket por falha de autenticacao.");
+      logWarn("AUTH", "Falha na autenticacao do socket", {
+        socket: socket.id,
+        error: error instanceof Error ? error.message : "erro desconhecido"
+      });
       next(new Error("Falha na autenticacao do socket."));
     }
   });
@@ -180,9 +209,11 @@ export function registrarEventosSocket(app: FastifyInstance, io: SocketIOServer)
     if (previousSocketId && previousSocketId !== socket.id) {
       const previousSocket = io.sockets.sockets.get(previousSocketId);
       if (previousSocket) {
-        app.log.info(
-          `[socket][connection] conta duplicada detectada. desconectando socket antigo=${previousSocketId}.`
-        );
+        logWarn("SOCKET", "Conexao duplicada detectada", {
+          character: session.characterName,
+          oldSocket: previousSocketId,
+          newSocket: socket.id
+        });
         previousSocket.disconnect(true);
       }
     }
@@ -197,7 +228,8 @@ export function registrarEventosSocket(app: FastifyInstance, io: SocketIOServer)
       y: session.y,
       hp: session.hp,
       maxHp: session.maxHp,
-      inventory: session.inventory
+      inventory: session.inventory,
+      playerType: PlayerType.WARRIOR
     });
 
     const sessionReadyPayload: SessionReadyPayload = {
@@ -209,32 +241,77 @@ export function registrarEventosSocket(app: FastifyInstance, io: SocketIOServer)
     socket.emit("session:ready", sessionReadyPayload);
     emitWorldUpdate(io, 0);
 
-    app.log.info(
-      `[socket][connection] player conectado | socket=${socket.id} | player=${session.characterName} | pos=(${session.x}, ${session.y})`
-    );
+    logInfo("SOCKET", "Player conectado", {
+      socket: socket.id,
+      player: session.characterName,
+      pos: `(${session.x},${session.y})`
+    });
 
     socket.on("player:move", (payload: unknown, confirmacao?: SocketAck) => {
       const parsedMove = validarPayloadMovimento(payload);
       if (!parsedMove.ok) {
         responder(confirmacao, false, parsedMove.errors.join(" | "));
+        logWarn("INPUT", "Payload invalido", {
+          socket: socket.id,
+          player: session.characterName,
+          error: parsedMove.errors.join(" | ")
+        });
         return;
       }
 
-      const updated = setPlayerInput(socket.id, parsedMove.data.direction);
+      const updated = setPlayerInput(socket.id, {
+        x: parsedMove.data.x,
+        y: parsedMove.data.y
+      });
       if (!updated) {
         responder(confirmacao, false, "Jogador nao encontrado no estado online.");
+        logWarn("INPUT", "Jogador nao encontrado para input", {
+          socket: socket.id,
+          player: session.characterName
+        });
         return;
       }
 
-      app.log.info(
-        [
-          "[socket][input]",
-          `player=${session.characterName}`,
-          `socket=${socket.id}`,
-          `direction=${parsedMove.data.direction ?? "stop"}`,
-          "emit(front)->on(back)->setInput(ok)"
-        ].join(" | ")
-      );
+      logInfo("INPUT", "Direcao recebida", {
+        player: session.characterName,
+        socket: socket.id,
+        input: `(${parsedMove.data.x.toFixed(2)},${parsedMove.data.y.toFixed(2)})`,
+        flow: "frontend.emit(player:move)->backend.on->setInput"
+      });
+
+      responder(confirmacao, true);
+    });
+
+    socket.on("atack", (payload: unknown, confirmacao?: SocketAck) => {
+      const parsedAtack = validarPayloadAtaque(payload);
+      if (!parsedAtack.ok) {
+        responder(confirmacao, false, parsedAtack.errors.join(" | "));
+        logWarn("ATACK", "Payload invalido", {
+          socket: socket.id,
+          player: session.characterName,
+          error: parsedAtack.errors.join(" | ")
+        });
+        return;
+      }
+
+      const range = parsedAtack.data.range ?? 2;
+      const created = createPlayerAttack(socket.id, range);
+      if (!created) {
+        responder(confirmacao, false, "Nao foi possivel criar ataque.");
+        return;
+      }
+
+      logInfo("ATACK", "Ataque criado", {
+        player: created.ownerName,
+        attackId: created.attackId,
+        facing: created.facing,
+        range: created.range,
+        attackPos: `(${created.x},${created.y})`,
+        clientPos:
+          parsedAtack.data.x !== undefined && parsedAtack.data.y !== undefined
+            ? `(${parsedAtack.data.x.toFixed(2)},${parsedAtack.data.y.toFixed(2)})`
+            : "nao informado"
+      });
 
       responder(confirmacao, true);
     });
@@ -258,9 +335,11 @@ export function registrarEventosSocket(app: FastifyInstance, io: SocketIOServer)
       });
 
       emitWorldUpdate(io, 0);
-      app.log.info(
-        `[socket][disconnect] player saiu | socket=${socket.id} | player=${removed.name} | reason=${reason}`
-      );
+      logInfo("SOCKET", "Player desconectado", {
+        socket: socket.id,
+        player: removed.name,
+        reason
+      });
     });
   });
 }

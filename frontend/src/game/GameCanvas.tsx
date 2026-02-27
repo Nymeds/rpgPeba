@@ -1,12 +1,13 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
+import idleGif from "../../images/Warrior/idle.gif";
+import runGif from "../../images/Warrior/run.gif";
 import { setupInput } from "./input";
 import type { Direction, WorldUpdatePayload } from "../types";
 
 const TILE_SIZE = 56;
 const PLAYER_INTERPOLATION_RATE = 16;
 const CAMERA_INTERPOLATION_RATE = 12;
-const PLAYER_MARGIN = 10;
 
 type CameraState = {
   x: number;
@@ -19,9 +20,24 @@ type RenderPlayer = {
   name: string;
   x: number;
   y: number;
+  targetX: number;
+  targetY: number;
   hp: number;
   maxHp: number;
   online: boolean;
+  facing: "left" | "right";
+  moving: boolean;
+};
+
+type OverlaySprite = {
+  id: number;
+  name: string;
+  left: number;
+  top: number;
+  size: number;
+  facing: "left" | "right";
+  moving: boolean;
+  self: boolean;
 };
 
 type GameCanvasProps = {
@@ -48,6 +64,7 @@ export default function GameCanvas({ world, selfPlayerId, onMove }: GameCanvasPr
   const lastFrameAtRef = useRef<number | null>(null);
   const worldRef = useRef(world);
   const selfPlayerIdRef = useRef(selfPlayerId);
+  const [overlaySprites, setOverlaySprites] = useState<OverlaySprite[]>([]);
 
   worldRef.current = world;
   selfPlayerIdRef.current = selfPlayerId;
@@ -104,6 +121,7 @@ export default function GameCanvas({ world, selfPlayerId, onMove }: GameCanvasPr
 
       if (!currentWorld || !currentSelfId) {
         renderedPlayersRef.current.clear();
+        setOverlaySprites([]);
         context.fillStyle = "#f3f6f8";
         context.font = "600 20px Rajdhani";
         context.fillText("Conectando no mundo...", 26, 44);
@@ -125,9 +143,13 @@ export default function GameCanvas({ world, selfPlayerId, onMove }: GameCanvasPr
             name: player.name,
             x: player.x,
             y: player.y,
+            targetX: player.x,
+            targetY: player.y,
             hp: player.hp,
             maxHp: player.maxHp,
-            online: player.online
+            online: player.online,
+            facing: "right",
+            moving: false
           });
           continue;
         }
@@ -136,8 +158,29 @@ export default function GameCanvas({ world, selfPlayerId, onMove }: GameCanvasPr
         existing.hp = player.hp;
         existing.maxHp = player.maxHp;
         existing.online = player.online;
-        existing.x += (player.x - existing.x) * alphaPlayer;
-        existing.y += (player.y - existing.y) * alphaPlayer;
+        existing.targetX = player.x;
+        existing.targetY = player.y;
+      }
+
+      for (const player of renderedPlayers.values()) {
+        const previousX = player.x;
+        const previousY = player.y;
+
+        player.x += (player.targetX - player.x) * alphaPlayer;
+        player.y += (player.targetY - player.y) * alphaPlayer;
+
+        const movedX = player.x - previousX;
+        const movedY = player.y - previousY;
+
+        if (movedX < -0.001) {
+          player.facing = "left";
+        } else if (movedX > 0.001) {
+          player.facing = "right";
+        }
+
+        const remainingDistance = Math.hypot(player.targetX - player.x, player.targetY - player.y);
+        const frameDistance = Math.hypot(movedX, movedY);
+        player.moving = frameDistance > 0.001 || remainingDistance > 0.01;
       }
 
       for (const playerId of [...renderedPlayers.keys()]) {
@@ -149,6 +192,7 @@ export default function GameCanvas({ world, selfPlayerId, onMove }: GameCanvasPr
       const selfPlayer = renderedPlayers.get(currentSelfId) ?? null;
 
       if (!selfPlayer) {
+        setOverlaySprites([]);
         context.fillStyle = "#f3f6f8";
         context.font = "600 20px Rajdhani";
         context.fillText("Aguardando seu personagem no snapshot...", 26, 44);
@@ -177,53 +221,56 @@ export default function GameCanvas({ world, selfPlayerId, onMove }: GameCanvasPr
 
       const offsetX = viewportWidth / 2 - camera.x;
       const offsetY = viewportHeight / 2 - camera.y;
+      const renderOffsetX = Math.round(offsetX);
+      const renderOffsetY = Math.round(offsetY);
 
       const gradient = context.createLinearGradient(0, 0, viewportWidth, viewportHeight);
       gradient.addColorStop(0, "#152028");
       gradient.addColorStop(1, "#111a22");
       context.fillStyle = gradient;
-      context.fillRect(offsetX, offsetY, mapPixelSize, mapPixelSize);
+      context.fillRect(renderOffsetX, renderOffsetY, mapPixelSize, mapPixelSize);
 
       context.strokeStyle = "rgba(186, 213, 228, 0.2)";
       context.lineWidth = 1;
       for (let x = 0; x <= currentWorld.mapSize; x += 1) {
-        const sx = offsetX + x * TILE_SIZE;
+        const sx = renderOffsetX + x * TILE_SIZE;
         context.beginPath();
-        context.moveTo(sx, offsetY);
-        context.lineTo(sx, offsetY + mapPixelSize);
+        context.moveTo(sx, renderOffsetY);
+        context.lineTo(sx, renderOffsetY + mapPixelSize);
         context.stroke();
       }
 
       for (let y = 0; y <= currentWorld.mapSize; y += 1) {
-        const sy = offsetY + y * TILE_SIZE;
+        const sy = renderOffsetY + y * TILE_SIZE;
         context.beginPath();
-        context.moveTo(offsetX, sy);
-        context.lineTo(offsetX + mapPixelSize, sy);
+        context.moveTo(renderOffsetX, sy);
+        context.lineTo(renderOffsetX + mapPixelSize, sy);
         context.stroke();
       }
 
       context.strokeStyle = "rgba(251, 210, 79, 0.65)";
       context.lineWidth = 2;
-      context.strokeRect(offsetX, offsetY, mapPixelSize, mapPixelSize);
+      context.strokeRect(renderOffsetX, renderOffsetY, mapPixelSize, mapPixelSize);
 
+      const sprites: OverlaySprite[] = [];
       for (const player of renderedPlayers.values()) {
-        const screenX = Math.round(offsetX + player.x * TILE_SIZE + PLAYER_MARGIN);
-        const screenY = Math.round(offsetY + player.y * TILE_SIZE + PLAYER_MARGIN);
-        const size = TILE_SIZE - PLAYER_MARGIN * 2;
-        const isSelf = player.id === currentSelfId;
-
-        context.fillStyle = isSelf ? "#ffd35d" : "#5ec8ff";
-        context.fillRect(screenX, screenY, size, size);
-
-        context.strokeStyle = isSelf ? "#ffe9a6" : "#c2ebff";
-        context.lineWidth = 2;
-        context.strokeRect(screenX, screenY, size, size);
-
-        context.fillStyle = "#f2f7fb";
-        context.font = isSelf ? "700 16px Rajdhani" : "500 14px Rajdhani";
-        context.textAlign = "center";
-        context.fillText(player.name, screenX + size / 2, screenY - 8);
+        const centerX = renderOffsetX + player.x * TILE_SIZE + TILE_SIZE / 2;
+        const floorY = renderOffsetY + player.y * TILE_SIZE + TILE_SIZE - 2;
+        const spriteSize = Math.round(TILE_SIZE * 1.4);
+        const drawX = Math.round(centerX - spriteSize / 2);
+        const drawY = Math.round(floorY - spriteSize);
+        sprites.push({
+          id: player.id,
+          name: player.name,
+          left: drawX,
+          top: drawY,
+          size: spriteSize,
+          facing: player.facing,
+          moving: player.moving,
+          self: player.id === currentSelfId
+        });
       }
+      setOverlaySprites(sprites);
 
       context.fillStyle = "rgba(5, 10, 13, 0.66)";
       context.fillRect(12, 12, 250, 62);
@@ -250,6 +297,27 @@ export default function GameCanvas({ world, selfPlayerId, onMove }: GameCanvasPr
   return (
     <div className="map-shell">
       <canvas ref={canvasRef} className="map-canvas" />
+      <div className="sprite-layer" aria-hidden="true">
+        {overlaySprites.map((sprite) => (
+          <div
+            key={sprite.id}
+            className={`player-sprite ${sprite.self ? "self" : ""}`}
+            style={{
+              left: sprite.left,
+              top: sprite.top,
+              width: sprite.size,
+              height: sprite.size
+            }}
+          >
+            <img
+              src={sprite.moving ? runGif : idleGif}
+              alt=""
+              className={`player-sprite-img ${sprite.facing === "left" ? "flip-left" : ""}`}
+            />
+            <span className="player-sprite-name">{sprite.name}</span>
+          </div>
+        ))}
+      </div>
       {!hasWorld ? <p className="map-hint">Conectando ao loop do servidor...</p> : null}
     </div>
   );

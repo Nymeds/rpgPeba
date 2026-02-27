@@ -1,8 +1,8 @@
-import type { FastifyInstance } from "fastify";
 import { Server as SocketIOServer } from "socket.io";
 
 import { MAP_SIZE } from "../game.js";
-import { applyMovement, buildPublicPlayersSnapshot } from "./world.js";
+import { logInfo } from "../logger.js";
+import { applyAttackDamage, applyMovement, buildPublicAttacksSnapshot, buildPublicPlayersSnapshot } from "./world.js";
 
 const TICK_RATE = 20;
 const TICK_INTERVAL_MS = 1000 / TICK_RATE;
@@ -14,22 +14,31 @@ type WorldUpdatePayload = {
   mapSize: number;
   tick: number;
   players: ReturnType<typeof buildPublicPlayersSnapshot>;
+  attacks: ReturnType<typeof buildPublicAttacksSnapshot>;
 };
 
 export function emitWorldUpdate(io: SocketIOServer, tick: number): void {
+  const nowMs = Date.now();
   const payload: WorldUpdatePayload = {
     mapSize: MAP_SIZE,
     tick,
-    players: buildPublicPlayersSnapshot()
+    players: buildPublicPlayersSnapshot(),
+    attacks: buildPublicAttacksSnapshot(nowMs)
   };
 
   io.emit("world:update", payload);
 }
 
-export function startGameLoop(app: FastifyInstance, io: SocketIOServer): () => void {
+export function startGameLoop(io: SocketIOServer): () => void {
   let tick = 0;
   let lastTickAt = Date.now();
   const lastMovementLogAtBySocket = new Map<string, number>();
+
+  logInfo("LOOP", "Iniciado", {
+    tickRate: TICK_RATE,
+    speed: MOVE_SPEED_TILES_PER_SECOND,
+    formula: "posNova=clamp(posAtual+direcao*velocidade*delta)"
+  });
 
   const intervalHandle = setInterval(() => {
     const now = Date.now();
@@ -38,9 +47,14 @@ export function startGameLoop(app: FastifyInstance, io: SocketIOServer): () => v
     lastTickAt = now;
 
     const movements = applyMovement(deltaSeconds, MOVE_SPEED_TILES_PER_SECOND);
+    const attackHits = applyAttackDamage(now);
 
     if (tick % LOOP_SUMMARY_INTERVAL_TICKS === 0 && movements.length > 0) {
-      app.log.info(`[loop] tick=${tick} movendo=${movements.length} player(s) dt=${deltaSeconds.toFixed(3)}s`);
+      logInfo("LOOP", "Resumo tick", {
+        tick,
+        moving: movements.length,
+        dt: deltaSeconds.toFixed(3)
+      });
     }
 
     for (const move of movements) {
@@ -50,17 +64,22 @@ export function startGameLoop(app: FastifyInstance, io: SocketIOServer): () => v
       }
       lastMovementLogAtBySocket.set(move.socketId, now);
 
-      app.log.info(
-        [
-          "[loop] move",
-          `player=${move.playerName}`,
-          `dir=${move.direction}`,
-          `from=(${move.fromX.toFixed(2)},${move.fromY.toFixed(2)})`,
-          `to=(${move.toX.toFixed(2)},${move.toY.toFixed(2)})`,
-          `dt=${move.deltaSeconds.toFixed(3)}`,
-          "eq: posNova = clamp(posAtual + direcao * velocidade * delta)"
-        ].join(" | ")
-      );
+      logInfo("MOVE", "Movimento aplicado", {
+        player: move.playerName,
+        vector: `(${move.vectorX.toFixed(2)},${move.vectorY.toFixed(2)})`,
+        from: `(${move.fromX.toFixed(2)},${move.fromY.toFixed(2)})`,
+        to: `(${move.toX.toFixed(2)},${move.toY.toFixed(2)})`,
+        dt: move.deltaSeconds.toFixed(3)
+      });
+    }
+
+    for (const hit of attackHits) {
+      logInfo("ATACK", "Dano aplicado", {
+        attackId: hit.attackId,
+        target: hit.targetName,
+        targetId: hit.targetCharacterId,
+        hpAfter: hit.hpAfter
+      });
     }
 
     tick += 1;

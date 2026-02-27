@@ -1,6 +1,17 @@
 export type Direction = "up" | "down" | "left" | "right";
 
+export enum PlayerType {
+  WARRIOR = "WARRIOR",
+  MAGE = "MAGE",
+  ARCHER = "ARCHER"
+}
+
 export type InventorySlot = string | null;
+
+export type MoveInput = {
+  x: number;
+  y: number;
+};
 
 export type Account = {
   id: number;
@@ -15,6 +26,7 @@ export type Character = {
   hp: number;
   maxHp: number;
   inventory: InventorySlot[];
+  playerType: PlayerType;
 };
 
 export type AuthResponse = {
@@ -32,12 +44,23 @@ export type PublicPlayer = {
   maxHp: number;
   inventory: InventorySlot[];
   online: boolean;
+  playerType: PlayerType;
+};
+
+export type PublicAttack = {
+  id: number;
+  ownerId: number;
+  x: number;
+  y: number;
+  size: number;
+  expiresAt: number;
 };
 
 export type WorldUpdatePayload = {
   mapSize: number;
   tick: number;
   players: PublicPlayer[];
+  attacks: PublicAttack[];
 };
 
 export type SessionReadyPayload = {
@@ -54,5 +77,6 @@ export type ServerToClientEvents = {
 };
 
 export type ClientToServerEvents = {
-  "player:move": (payload: { direction: Direction | null }, ack?: SocketAck) => void;
+  "player:move": (payload: MoveInput, ack?: SocketAck) => void;
+  atack: (payload: { x: number; y: number; range: number }, ack?: SocketAck) => void;
 };
