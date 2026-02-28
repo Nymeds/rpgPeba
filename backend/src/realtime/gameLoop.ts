@@ -2,7 +2,14 @@ import { Server as SocketIOServer } from "socket.io";
 
 import { MAP_SIZE } from "../game.js";
 import { logInfo } from "../logger.js";
-import { applyAttackDamage, applyMovement, buildPublicAttacksSnapshot, buildPublicPlayersSnapshot } from "./world.js";
+import { appendSystemChatMessage } from "./chat.js";
+import {
+  applyAttackDamage,
+  applyMovement,
+  applyRespawns,
+  buildPublicAttacksSnapshot,
+  buildPublicPlayersSnapshot
+} from "./world.js";
 
 const TICK_RATE = 20;
 const TICK_INTERVAL_MS = 1000 / TICK_RATE;
@@ -48,6 +55,7 @@ export function startGameLoop(io: SocketIOServer): () => void {
 
     const movements = applyMovement(deltaSeconds, MOVE_SPEED_TILES_PER_SECOND);
     const attackHits = applyAttackDamage(now);
+    const respawns = applyRespawns(now);
 
     if (tick % LOOP_SUMMARY_INTERVAL_TICKS === 0 && movements.length > 0) {
       logInfo("LOOP", "Resumo tick", {
@@ -76,9 +84,23 @@ export function startGameLoop(io: SocketIOServer): () => void {
     for (const hit of attackHits) {
       logInfo("ATACK", "Dano aplicado", {
         attackId: hit.attackId,
+        owner: hit.ownerName,
         target: hit.targetName,
         targetId: hit.targetCharacterId,
-        hpAfter: hit.hpAfter
+        hpAfter: hit.hpAfter,
+        dead: hit.targetDied
+      });
+
+      if (hit.targetDied) {
+        const deathMessage = appendSystemChatMessage(`${hit.targetName} foi derrotado por ${hit.ownerName}.`);
+        io.emit("chat:message", deathMessage);
+      }
+    }
+
+    for (const respawn of respawns) {
+      logInfo("RESPAWN", "Player reapareceu", {
+        player: respawn.playerName,
+        pos: `(${respawn.x},${respawn.y})`
       });
     }
 

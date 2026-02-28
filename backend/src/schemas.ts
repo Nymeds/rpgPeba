@@ -60,11 +60,11 @@ const movePayloadSchema = z.object({
 });
 
 // Tecnico: Schema de ataque via socket (evento "atack").
-// Crianca: Cliente manda sua posicao e alcance (padrao 2) para fins didaticos.
+// Crianca: Cliente manda direcao do golpe (pode ser diagonal) e alcance.
 const attackPayloadSchema = z.object({
-  x: z.number().optional(),
-  y: z.number().optional(),
-  range: z.number().int("range: use inteiro.").min(1, "range: minimo 1.").max(6, "range: maximo 6.").optional()
+  dirX: z.number().min(-1, "dirX: minimo -1.").max(1, "dirX: maximo 1."),
+  dirY: z.number().min(-1, "dirY: minimo -1.").max(1, "dirY: maximo 1."),
+  range: z.number().min(0.5, "range: minimo 0.5.").max(3, "range: maximo 3.").optional()
 });
 
 // Tecnico: Tipos inferidos automaticamente do schema.
@@ -122,7 +122,5 @@ export function validarPayloadMovimento(payload: unknown): ValidationResult<Move
 }
 
 export function validarPayloadAtaque(payload: unknown): ValidationResult<AttackPayload> {
-  // Tecnico: Nulo/undefined vira objeto vazio para usar alcance padrao depois.
-  // Crianca: Se nao mandar nada, o backend assume ataque basico.
-  return validarComSchema(attackPayloadSchema, payload ?? {});
+  return validarComSchema(attackPayloadSchema, payload);
 }

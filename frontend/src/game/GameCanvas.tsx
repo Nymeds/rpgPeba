@@ -1,13 +1,15 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type MouseEvent as ReactMouseEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import idleGif from "../../images/Warrior/idle.gif";
 import runGif from "../../images/Warrior/run.gif";
 import { setupInput } from "./input";
-import type { Direction, WorldUpdatePayload } from "../types";
+import type { MoveInput, WorldUpdatePayload } from "../types";
 
-const TILE_SIZE = 56;
+const TILE_SIZE = 80;
 const PLAYER_INTERPOLATION_RATE = 16;
 const CAMERA_INTERPOLATION_RATE = 12;
+const AIM_VECTOR_SENSITIVITY = 0.025;
+const ATTACK_RANGE_TILES = 1;
 
 type CameraState = {
   x: number;
@@ -35,15 +37,24 @@ type OverlaySprite = {
   left: number;
   top: number;
   size: number;
+  hp: number;
+  maxHp: number;
   facing: "left" | "right";
   moving: boolean;
   self: boolean;
 };
 
+type AttackAimInput = {
+  dirX: number;
+  dirY: number;
+  range?: number;
+};
+
 type GameCanvasProps = {
   world: WorldUpdatePayload | null;
   selfPlayerId: number | null;
-  onMove: (direction: Direction | null) => void;
+  onMove: (input: MoveInput) => void;
+  onAttack?: (input: AttackAimInput) => void;
 };
 
 function clamp(value: number, min: number, max: number): number {
@@ -57,24 +68,170 @@ function interpolationAlpha(ratePerSecond: number, deltaSeconds: number): number
   return 1 - Math.exp(-ratePerSecond * deltaSeconds);
 }
 
-export default function GameCanvas({ world, selfPlayerId, onMove }: GameCanvasProps) {
+function healthPercent(hp: number, maxHp: number): number {
+  if (maxHp <= 0) {
+    return 0;
+  }
+  const ratio = hp / maxHp;
+  return Math.max(0, Math.min(100, Math.round(ratio * 100)));
+}
+
+function normalizeDirection(
+  x: number,
+  y: number,
+  fallback: { x: number; y: number } = { x: 1, y: 0 }
+): { x: number; y: number } {
+  const length = Math.hypot(x, y);
+  if (length < 0.0001) {
+    return fallback;
+  }
+
+  return {
+    x: x / length,
+    y: y / length
+  };
+}
+
+function angleDegFromVector(x: number, y: number): number {
+  return (Math.atan2(y, x) * 180) / Math.PI;
+}
+
+export default function GameCanvas({ world, selfPlayerId, onMove, onAttack }: GameCanvasProps) {
+  const mapShellRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const cameraRef = useRef<CameraState>({ x: 0, y: 0, initialized: false });
   const renderedPlayersRef = useRef<Map<number, RenderPlayer>>(new Map());
   const lastFrameAtRef = useRef<number | null>(null);
   const worldRef = useRef(world);
   const selfPlayerIdRef = useRef(selfPlayerId);
+  const onAttackRef = useRef(onAttack);
+  const aimVectorRef = useRef<{ x: number; y: number }>({ x: 1, y: 0 });
+
   const [overlaySprites, setOverlaySprites] = useState<OverlaySprite[]>([]);
+  const [aimLocked, setAimLocked] = useState(false);
+  const [aimVector, setAimVector] = useState<{ x: number; y: number }>({ x: 1, y: 0 });
 
   worldRef.current = world;
   selfPlayerIdRef.current = selfPlayerId;
+  onAttackRef.current = onAttack;
 
   const hasWorld = useMemo(() => Boolean(world && world.players.length > 0), [world]);
+  const selfPlayerOverlayInfo = useMemo(() => {
+    if (!world || !selfPlayerId) {
+      return null;
+    }
+
+    const player = world.players.find((entry) => entry.id === selfPlayerId);
+    if (!player) {
+      return null;
+    }
+
+    return {
+      name: player.name,
+      x: player.x,
+      y: player.y
+    };
+  }, [selfPlayerId, world]);
+
+  const selfSprite = useMemo(() => overlaySprites.find((sprite) => sprite.self) ?? null, [overlaySprites]);
+
+  const aimArrow = useMemo(() => {
+    if (!aimLocked || !selfSprite) {
+      return null;
+    }
+
+    const centerX = selfSprite.left + selfSprite.size / 2;
+    const centerY = selfSprite.top + selfSprite.size / 2;
+    const radius = selfSprite.size * 0.84;
+    const angle = angleDegFromVector(aimVector.x, aimVector.y);
+
+    return {
+      lineLeft: centerX,
+      lineTop: centerY,
+      lineWidth: radius,
+      tipLeft: centerX + aimVector.x * radius,
+      tipTop: centerY + aimVector.y * radius,
+      angle
+    };
+  }, [aimLocked, aimVector, selfSprite]);
+
+  const emitAimAttack = useCallback(() => {
+    const sendAttack = onAttackRef.current;
+    if (!sendAttack) {
+      return;
+    }
+
+    const direction = normalizeDirection(aimVectorRef.current.x, aimVectorRef.current.y, { x: 1, y: 0 });
+    aimVectorRef.current = direction;
+    setAimVector(direction);
+
+    sendAttack({
+      dirX: direction.x,
+      dirY: direction.y,
+      range: ATTACK_RANGE_TILES
+    });
+  }, []);
 
   useEffect(() => {
-    const cleanup = setupInput(onMove);
+    const cleanup = setupInput(onMove, emitAimAttack);
     return cleanup;
-  }, [onMove]);
+  }, [emitAimAttack, onMove]);
+
+  useEffect(() => {
+    const shell = mapShellRef.current;
+    if (!shell) {
+      return;
+    }
+
+    const handlePointerLockChange = () => {
+      const locked = document.pointerLockElement === shell;
+      setAimLocked(locked);
+
+      if (!locked) {
+        onMove({ x: 0, y: 0 });
+      }
+    };
+
+    const handlePointerLockError = () => {
+      setAimLocked(false);
+    };
+
+    const handleMouseMove = (event: MouseEvent) => {
+      if (document.pointerLockElement !== shell) {
+        return;
+      }
+
+      const next = normalizeDirection(
+        aimVectorRef.current.x + event.movementX * AIM_VECTOR_SENSITIVITY,
+        aimVectorRef.current.y + event.movementY * AIM_VECTOR_SENSITIVITY,
+        aimVectorRef.current
+      );
+
+      aimVectorRef.current = next;
+      setAimVector(next);
+    };
+
+    const handleMouseDown = (event: MouseEvent) => {
+      if (event.button !== 0 || document.pointerLockElement !== shell) {
+        return;
+      }
+
+      event.preventDefault();
+      emitAimAttack();
+    };
+
+    document.addEventListener("pointerlockchange", handlePointerLockChange);
+    document.addEventListener("pointerlockerror", handlePointerLockError);
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mousedown", handleMouseDown);
+
+    return () => {
+      document.removeEventListener("pointerlockchange", handlePointerLockChange);
+      document.removeEventListener("pointerlockerror", handlePointerLockError);
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mousedown", handleMouseDown);
+    };
+  }, [emitAimAttack, onMove]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -252,11 +409,28 @@ export default function GameCanvas({ world, selfPlayerId, onMove }: GameCanvasPr
       context.lineWidth = 2;
       context.strokeRect(renderOffsetX, renderOffsetY, mapPixelSize, mapPixelSize);
 
+      for (const attack of currentWorld.attacks) {
+        const centerX = renderOffsetX + attack.x * TILE_SIZE + TILE_SIZE / 2;
+        const centerY = renderOffsetY + attack.y * TILE_SIZE + TILE_SIZE / 2;
+        const radius = Math.max(TILE_SIZE * 0.18, attack.radius * TILE_SIZE);
+
+        context.fillStyle = "rgba(255, 35, 35, 0.35)";
+        context.beginPath();
+        context.arc(centerX, centerY, radius, 0, Math.PI * 2);
+        context.fill();
+
+        context.strokeStyle = "rgba(255, 90, 90, 0.9)";
+        context.lineWidth = 2;
+        context.beginPath();
+        context.arc(centerX, centerY, radius, 0, Math.PI * 2);
+        context.stroke();
+      }
+
       const sprites: OverlaySprite[] = [];
       for (const player of renderedPlayers.values()) {
         const centerX = renderOffsetX + player.x * TILE_SIZE + TILE_SIZE / 2;
         const floorY = renderOffsetY + player.y * TILE_SIZE + TILE_SIZE - 2;
-        const spriteSize = Math.round(TILE_SIZE * 1.4);
+        const spriteSize = TILE_SIZE;
         const drawX = Math.round(centerX - spriteSize / 2);
         const drawY = Math.round(floorY - spriteSize);
         sprites.push({
@@ -265,20 +439,14 @@ export default function GameCanvas({ world, selfPlayerId, onMove }: GameCanvasPr
           left: drawX,
           top: drawY,
           size: spriteSize,
+          hp: player.hp,
+          maxHp: player.maxHp,
           facing: player.facing,
           moving: player.moving,
           self: player.id === currentSelfId
         });
       }
       setOverlaySprites(sprites);
-
-      context.fillStyle = "rgba(5, 10, 13, 0.66)";
-      context.fillRect(12, 12, 250, 62);
-      context.fillStyle = "#dce7ee";
-      context.font = "600 16px Rajdhani";
-      context.textAlign = "left";
-      context.fillText(`Seu player: ${selfPlayer.name}`, 20, 36);
-      context.fillText(`Pos: (${selfPlayer.x.toFixed(1)}, ${selfPlayer.y.toFixed(1)})`, 20, 58);
 
       rafId = window.requestAnimationFrame(draw);
     };
@@ -294,8 +462,27 @@ export default function GameCanvas({ world, selfPlayerId, onMove }: GameCanvasPr
     };
   }, []);
 
+  const handleMapShellMouseDown = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
+    if (event.button !== 0) {
+      return;
+    }
+
+    const shell = mapShellRef.current;
+    if (!shell || document.pointerLockElement === shell) {
+      return;
+    }
+
+    const rect = shell.getBoundingClientRect();
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+    const initialAim = normalizeDirection(event.clientX - centerX, event.clientY - centerY, aimVectorRef.current);
+    aimVectorRef.current = initialAim;
+    setAimVector(initialAim);
+    void shell.requestPointerLock();
+  }, []);
+
   return (
-    <div className="map-shell">
+    <div ref={mapShellRef} className="map-shell" onMouseDown={handleMapShellMouseDown}>
       <canvas ref={canvasRef} className="map-canvas" />
       <div className="sprite-layer" aria-hidden="true">
         {overlaySprites.map((sprite) => (
@@ -309,6 +496,9 @@ export default function GameCanvas({ world, selfPlayerId, onMove }: GameCanvasPr
               height: sprite.size
             }}
           >
+            <div className="player-sprite-health">
+              <span style={{ width: `${healthPercent(sprite.hp, sprite.maxHp)}%` }} />
+            </div>
             <img
               src={sprite.moving ? runGif : idleGif}
               alt=""
@@ -318,6 +508,43 @@ export default function GameCanvas({ world, selfPlayerId, onMove }: GameCanvasPr
           </div>
         ))}
       </div>
+
+      {aimArrow ? (
+        <>
+          <div
+            className="attack-aim-line"
+            style={{
+              left: aimArrow.lineLeft,
+              top: aimArrow.lineTop,
+              width: aimArrow.lineWidth,
+              transform: `translateY(-50%) rotate(${aimArrow.angle}deg)`
+            }}
+          />
+          <div
+            className="attack-aim-arrow"
+            style={{
+              left: aimArrow.tipLeft,
+              top: aimArrow.tipTop,
+              transform: `translate(-50%, -50%) rotate(${aimArrow.angle}deg)`
+            }}
+          />
+        </>
+      ) : null}
+
+      {selfPlayerOverlayInfo ? (
+        <div className="map-hud" aria-hidden="true">
+          <p>Seu player: {selfPlayerOverlayInfo.name}</p>
+          <p>
+            Pos: ({selfPlayerOverlayInfo.x.toFixed(1)}, {selfPlayerOverlayInfo.y.toFixed(1)})
+          </p>
+        </div>
+      ) : null}
+
+      <p className={`map-aim-hint ${aimLocked ? "active" : ""}`}>
+        {aimLocked
+          ? "Mira ativa: mova o mouse, clique ou espaco para atacar. ESC libera o cursor."
+          : "Clique na arena para travar o mouse e ativar a mira."}
+      </p>
       {!hasWorld ? <p className="map-hint">Conectando ao loop do servidor...</p> : null}
     </div>
   );

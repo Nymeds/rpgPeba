@@ -1,10 +1,12 @@
-import { MAP_SIZE, PlayerType, limitarAoMapa, type PublicAttack, type PublicPlayer } from "../game.js";
+import { MAP_SIZE, PlayerType, SPAWN_POSITION, limitarAoMapa, type PublicAttack, type PublicPlayer } from "../game.js";
 import type { Direction } from "./types.js";
 
 const ATTACK_DAMAGE = 20;
-const ATTACK_DURATION_MS = 1200;
-const ATTACK_DEFAULT_RANGE = 2;
-const ATTACK_SIZE_TILES = 1;
+const ATTACK_DURATION_MS = 500;
+const ATTACK_DEFAULT_RANGE = 1;
+const ATTACK_RADIUS_TILES = 0.65;
+const ATTACK_COOLDOWN_MS = 500;
+const RESPAWN_DELAY_MS = 3000;
 
 export type InputVector = {
   x: number;
@@ -26,6 +28,8 @@ export type OnlinePlayerState = {
   inputX: number;
   inputY: number;
   facing: Direction;
+  deadUntilMs: number | null;
+  lastAttackAtMs: number;
   dirtyState: boolean;
 };
 
@@ -46,20 +50,35 @@ export type AttackCreationResult = {
   attackId: number;
   ownerCharacterId: number;
   ownerName: string;
-  facing: Direction;
+  directionX: number;
+  directionY: number;
   x: number;
   y: number;
   range: number;
+  radius: number;
   expiresAt: number;
 };
 
 export type AttackHitResult = {
   attackId: number;
   ownerCharacterId: number;
+  ownerName: string;
   targetCharacterId: number;
   targetName: string;
   hpAfter: number;
+  targetDied: boolean;
 };
+
+export type RespawnResult = {
+  characterId: number;
+  playerName: string;
+  x: number;
+  y: number;
+};
+
+export type AttackCreateOutcome =
+  | { ok: true; attack: AttackCreationResult }
+  | { ok: false; error: string };
 
 type ActiveAttackState = {
   id: number;
@@ -67,12 +86,15 @@ type ActiveAttackState = {
   ownerName: string;
   x: number;
   y: number;
-  size: number;
+  radius: number;
   expiresAt: number;
   hitCharacterIds: Set<number>;
 };
 
-type RegisterOnlinePlayerInput = Omit<OnlinePlayerState, "inputX" | "inputY" | "facing" | "dirtyState">;
+type RegisterOnlinePlayerInput = Omit<
+  OnlinePlayerState,
+  "inputX" | "inputY" | "facing" | "deadUntilMs" | "lastAttackAtMs" | "dirtyState"
+>;
 
 const onlinePlayersBySocket = new Map<string, OnlinePlayerState>();
 const socketByCharacterId = new Map<number, string>();
@@ -119,6 +141,19 @@ function clampInput(value: number): number {
   return clamped;
 }
 
+function normalizeVector(x: number, y: number): { x: number; y: number; length: number } {
+  const length = Math.hypot(x, y);
+  if (length < 0.0001) {
+    return { x: 0, y: 0, length: 0 };
+  }
+
+  return {
+    x: x / length,
+    y: y / length,
+    length
+  };
+}
+
 function cleanupExpiredAttacks(nowMs: number): void {
   for (const [attackId, attack] of activeAttacksById.entries()) {
     if (attack.expiresAt <= nowMs) {
@@ -134,12 +169,20 @@ export function registerOnlinePlayer(input: RegisterOnlinePlayerInput): string |
     onlinePlayersBySocket.delete(previousSocketId);
   }
 
+  const hp = input.hp <= 0 ? input.maxHp : input.hp;
+  const x = input.hp <= 0 ? SPAWN_POSITION.x : input.x;
+  const y = input.hp <= 0 ? SPAWN_POSITION.y : input.y;
   onlinePlayersBySocket.set(input.socketId, {
     ...input,
+    hp,
+    x,
+    y,
     inputX: 0,
     inputY: 0,
     facing: "down",
-    dirtyState: false
+    deadUntilMs: null,
+    lastAttackAtMs: 0,
+    dirtyState: input.hp <= 0
   });
   socketByCharacterId.set(input.characterId, input.socketId);
 
@@ -156,39 +199,51 @@ export function setPlayerInput(socketId: string, input: InputVector): boolean {
     return false;
   }
 
+  if (player.deadUntilMs !== null || player.hp <= 0) {
+    player.inputX = 0;
+    player.inputY = 0;
+    return true;
+  }
+
   player.inputX = clampInput(input.x);
   player.inputY = clampInput(input.y);
   player.facing = directionFromInput(player.inputX, player.inputY, player.facing);
   return true;
 }
 
-export function createPlayerAttack(socketId: string, rangeInput = ATTACK_DEFAULT_RANGE, nowMs = Date.now()): AttackCreationResult | null {
+export function createPlayerAttack(
+  socketId: string,
+  directionInput: { x: number; y: number },
+  rangeInput = ATTACK_DEFAULT_RANGE,
+  nowMs = Date.now()
+): AttackCreateOutcome {
   const player = onlinePlayersBySocket.get(socketId);
   if (!player) {
-    return null;
+    return { ok: false, error: "Jogador nao encontrado." };
   }
 
-  const range = Math.max(1, Math.min(6, Math.round(rangeInput)));
-  const baseX = Math.round(player.x);
-  const baseY = Math.round(player.y);
-
-  let targetX = baseX;
-  let targetY = baseY;
-
-  if (player.facing === "up") {
-    targetY -= range;
-  } else if (player.facing === "down") {
-    targetY += range;
-  } else if (player.facing === "left") {
-    targetX -= range;
-  } else {
-    targetX += range;
+  if (player.deadUntilMs !== null || player.hp <= 0) {
+    return { ok: false, error: "Voce esta morto e nao pode atacar." };
   }
 
-  const attackX = Math.round(limitarAoMapa(targetX));
-  const attackY = Math.round(limitarAoMapa(targetY));
+  const remainingCooldownMs = player.lastAttackAtMs + ATTACK_COOLDOWN_MS - nowMs;
+  if (remainingCooldownMs > 0) {
+    return { ok: false, error: `Ataque em cooldown (${remainingCooldownMs}ms).` };
+  }
+
+  const normalizedDirection = normalizeVector(directionInput.x, directionInput.y);
+  if (normalizedDirection.length < 0.0001) {
+    return { ok: false, error: "Direcao de ataque invalida." };
+  }
+
+  player.facing = directionFromInput(normalizedDirection.x, normalizedDirection.y, player.facing);
+
+  const range = Math.max(0.5, Math.min(3, rangeInput));
+  const attackX = limitarAoMapa(player.x + normalizedDirection.x * range);
+  const attackY = limitarAoMapa(player.y + normalizedDirection.y * range);
   const attackId = nextAttackId++;
   const expiresAt = nowMs + ATTACK_DURATION_MS;
+  player.lastAttackAtMs = nowMs;
 
   activeAttacksById.set(attackId, {
     id: attackId,
@@ -196,20 +251,25 @@ export function createPlayerAttack(socketId: string, rangeInput = ATTACK_DEFAULT
     ownerName: player.name,
     x: attackX,
     y: attackY,
-    size: ATTACK_SIZE_TILES,
+    radius: ATTACK_RADIUS_TILES,
     expiresAt,
     hitCharacterIds: new Set<number>()
   });
 
   return {
-    attackId,
-    ownerCharacterId: player.characterId,
-    ownerName: player.name,
-    facing: player.facing,
-    x: attackX,
-    y: attackY,
-    range,
-    expiresAt
+    ok: true,
+    attack: {
+      attackId,
+      ownerCharacterId: player.characterId,
+      ownerName: player.name,
+      directionX: normalizedDirection.x,
+      directionY: normalizedDirection.y,
+      x: attackX,
+      y: attackY,
+      range,
+      radius: ATTACK_RADIUS_TILES,
+      expiresAt
+    }
   };
 }
 
@@ -217,6 +277,10 @@ export function applyMovement(deltaSeconds: number, velocityTilesPerSecond: numb
   const computations: MovementComputation[] = [];
 
   for (const player of onlinePlayersBySocket.values()) {
+    if (player.deadUntilMs !== null || player.hp <= 0) {
+      continue;
+    }
+
     if (player.inputX === 0 && player.inputY === 0) {
       continue;
     }
@@ -267,15 +331,20 @@ export function applyAttackDamage(nowMs = Date.now()): AttackHitResult[] {
         continue;
       }
 
+      if (player.deadUntilMs !== null || player.hp <= 0) {
+        continue;
+      }
+
       if (attack.hitCharacterIds.has(player.characterId)) {
         continue;
       }
 
-      const playerTileX = Math.round(player.x);
-      const playerTileY = Math.round(player.y);
-      const insideAttackX = playerTileX >= attack.x && playerTileX < attack.x + attack.size;
-      const insideAttackY = playerTileY >= attack.y && playerTileY < attack.y + attack.size;
-      const insideAttack = insideAttackX && insideAttackY;
+      const playerCenterX = player.x + 0.5;
+      const playerCenterY = player.y + 0.5;
+      const attackCenterX = attack.x + 0.5;
+      const attackCenterY = attack.y + 0.5;
+      const distance = Math.hypot(playerCenterX - attackCenterX, playerCenterY - attackCenterY);
+      const insideAttack = distance <= attack.radius;
 
       if (!insideAttack) {
         continue;
@@ -283,19 +352,58 @@ export function applyAttackDamage(nowMs = Date.now()): AttackHitResult[] {
 
       attack.hitCharacterIds.add(player.characterId);
       player.hp = Math.max(0, player.hp - ATTACK_DAMAGE);
+      const targetDied = player.hp === 0;
+      if (targetDied) {
+        player.deadUntilMs = nowMs + RESPAWN_DELAY_MS;
+        player.inputX = 0;
+        player.inputY = 0;
+      }
       player.dirtyState = true;
 
       hits.push({
         attackId: attack.id,
         ownerCharacterId: attack.ownerCharacterId,
+        ownerName: attack.ownerName,
         targetCharacterId: player.characterId,
         targetName: player.name,
-        hpAfter: player.hp
+        hpAfter: player.hp,
+        targetDied
       });
     }
   }
 
   return hits;
+}
+
+export function applyRespawns(nowMs = Date.now()): RespawnResult[] {
+  const respawns: RespawnResult[] = [];
+
+  for (const player of onlinePlayersBySocket.values()) {
+    if (player.deadUntilMs === null) {
+      continue;
+    }
+
+    if (player.deadUntilMs > nowMs) {
+      continue;
+    }
+
+    player.deadUntilMs = null;
+    player.hp = player.maxHp;
+    player.x = SPAWN_POSITION.x;
+    player.y = SPAWN_POSITION.y;
+    player.inputX = 0;
+    player.inputY = 0;
+    player.dirtyState = true;
+
+    respawns.push({
+      characterId: player.characterId,
+      playerName: player.name,
+      x: player.x,
+      y: player.y
+    });
+  }
+
+  return respawns;
 }
 
 export function removeOnlinePlayer(socketId: string): OnlinePlayerState | null {
@@ -381,7 +489,7 @@ export function buildPublicAttacksSnapshot(nowMs = Date.now()): PublicAttack[] {
       ownerId: attack.ownerCharacterId,
       x: attack.x,
       y: attack.y,
-      size: attack.size,
+      radius: attack.radius,
       expiresAt: attack.expiresAt
     }))
     .sort((a, b) => a.id - b.id);

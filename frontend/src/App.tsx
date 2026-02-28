@@ -1,13 +1,14 @@
-import { type FormEvent, useEffect, useMemo, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { autenticarConta, carregarSessao, criarPersonagem, registrarConta } from "./api";
 import GameCanvas from "./game/GameCanvas";
 import { useGameSocket } from "./game/useGameSocket";
-import type { Account, AuthResponse, Character } from "./types";
+import type { Account, AuthResponse, Character, PublicPlayer } from "./types";
 
 type AuthMode = "login" | "register";
 
 const TOKEN_KEY = "rpg-peba-jwt";
+const CHAT_MAX_LENGTH = 220;
 
 function salvarToken(token: string): void {
   localStorage.setItem(TOKEN_KEY, token);
@@ -23,7 +24,7 @@ function limparToken(): void {
 
 function statusSessao(account: Account | null, character: Character | null): string {
   if (!account) {
-    return "Faça login para entrar no mundo.";
+    return "Faca login para entrar no mundo.";
   }
 
   if (!character) {
@@ -31,6 +32,26 @@ function statusSessao(account: Account | null, character: Character | null): str
   }
 
   return `Logado como @${account.username} com ${character.name}.`;
+}
+
+function formatarHora(timestamp: number): string {
+  return new Date(timestamp).toLocaleTimeString("pt-BR", {
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
+
+function hpPercent(player: Pick<PublicPlayer, "hp" | "maxHp">): number {
+  if (player.maxHp <= 0) {
+    return 0;
+  }
+  return Math.max(0, Math.min(100, Math.round((player.hp / player.maxHp) * 100)));
+}
+
+function mapPercent(value: number, mapSize: number): number {
+  const divisor = Math.max(1, mapSize - 1);
+  const percent = (value / divisor) * 100;
+  return Math.max(0, Math.min(100, percent));
 }
 
 export default function App() {
@@ -43,9 +64,13 @@ export default function App() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [characterName, setCharacterName] = useState("");
+  const [chatInput, setChatInput] = useState("");
 
   const [busy, setBusy] = useState(false);
+  const [chatBusy, setChatBusy] = useState(false);
   const [notice, setNotice] = useState("Pronto para conectar.");
+
+  const chatLogRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -58,7 +83,7 @@ export default function App() {
         setSessionBooting(false);
         setAccount(null);
         setCharacter(null);
-        setNotice("Faça login para entrar no mundo.");
+        setNotice("Faca login para entrar no mundo.");
         return;
       }
 
@@ -82,7 +107,7 @@ export default function App() {
         setToken(null);
         setAccount(null);
         setCharacter(null);
-        setNotice("Sessão expirada. Faça login novamente.");
+        setNotice("Sessao expirada. Faca login novamente.");
       } finally {
         if (active) {
           setSessionBooting(false);
@@ -100,6 +125,14 @@ export default function App() {
   const gameSocket = useGameSocket(token, socketEnabled);
   const selfPlayerId = gameSocket.session?.playerId ?? character?.id ?? null;
 
+  useEffect(() => {
+    const node = chatLogRef.current;
+    if (!node) {
+      return;
+    }
+    node.scrollTop = node.scrollHeight;
+  }, [gameSocket.chatMessages.length]);
+
   const socketStatusLabel = useMemo(() => {
     if (!socketEnabled) {
       return "socket inativo";
@@ -116,6 +149,14 @@ export default function App() {
     return "socket aguardando";
   }, [gameSocket.status, socketEnabled]);
 
+  const worldPlayers = gameSocket.world?.players ?? [];
+  const sortedPlayers = useMemo(
+    () => [...worldPlayers].sort((a, b) => a.name.localeCompare(b.name)),
+    [worldPlayers]
+  );
+  const selfWorldPlayer = gameSocket.world?.players.find((player) => player.id === selfPlayerId) ?? null;
+  const minimapSize = gameSocket.world?.mapSize ?? gameSocket.session?.mapSize ?? 1;
+
   function aplicarRespostaAuth(response: AuthResponse): void {
     salvarToken(response.token);
     setToken(response.token);
@@ -128,7 +169,7 @@ export default function App() {
     event.preventDefault();
 
     if (!username.trim() || !password.trim()) {
-      setNotice("Preencha usuário e senha.");
+      setNotice("Preencha usuario e senha.");
       return;
     }
 
@@ -148,7 +189,7 @@ export default function App() {
       setPassword("");
     } catch (error) {
       console.error(error);
-      setNotice(error instanceof Error ? error.message : "Falha de autenticação.");
+      setNotice(error instanceof Error ? error.message : "Falha de autenticacao.");
     } finally {
       setBusy(false);
     }
@@ -158,7 +199,7 @@ export default function App() {
     event.preventDefault();
 
     if (!token) {
-      setNotice("Token ausente. Faça login novamente.");
+      setNotice("Token ausente. Faca login novamente.");
       return;
     }
 
@@ -183,6 +224,31 @@ export default function App() {
     }
   }
 
+  async function onSubmitChat(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+    if (!socketEnabled || chatBusy) {
+      return;
+    }
+
+    const messageText = chatInput.trim();
+    if (!messageText) {
+      return;
+    }
+
+    setChatBusy(true);
+    setChatInput("");
+
+    try {
+      const ack = await gameSocket.sendChat(messageText);
+      if (!ack.ok) {
+        setNotice(ack.error ?? "Nao foi possivel enviar no chat.");
+        setChatInput(messageText);
+      }
+    } finally {
+      setChatBusy(false);
+    }
+  }
+
   function logout(): void {
     limparToken();
     setToken(null);
@@ -191,6 +257,7 @@ export default function App() {
     setUsername("");
     setPassword("");
     setCharacterName("");
+    setChatInput("");
     setNotice("Logout feito.");
   }
 
@@ -198,7 +265,7 @@ export default function App() {
     <div className="app-shell">
       <header className="hero">
         <p className="eyebrow">RPG Peba MMO Prototype</p>
-        <h1>Mapa em tempo real com JWT + Socket.IO</h1>
+        <h1>Sala realtime: jogo, chat, online e mini mapa</h1>
         <div className="status-bar">
           <span>{notice}</span>
           <span>{socketStatusLabel}</span>
@@ -207,7 +274,7 @@ export default function App() {
 
       {sessionBooting ? (
         <section className="panel card-center">
-          <h2>Restaurando sessão</h2>
+          <h2>Restaurando sessao</h2>
           <p>Validando token salvo e buscando seus dados...</p>
         </section>
       ) : null}
@@ -216,7 +283,7 @@ export default function App() {
         <section className="panel card-center">
           <h2>{authMode === "login" ? "Entrar na conta" : "Criar conta"}</h2>
           <form onSubmit={onSubmitAuth} className="stack-form">
-            <label htmlFor="username">Usuário</label>
+            <label htmlFor="username">Usuario</label>
             <input
               id="username"
               value={username}
@@ -245,7 +312,7 @@ export default function App() {
             className="btn-link"
             onClick={() => setAuthMode((mode) => (mode === "login" ? "register" : "login"))}
           >
-            {authMode === "login" ? "Não tem conta? Registrar" : "Já tem conta? Fazer login"}
+            {authMode === "login" ? "Nao tem conta? Registrar" : "Ja tem conta? Fazer login"}
           </button>
         </section>
       ) : null}
@@ -253,7 +320,7 @@ export default function App() {
       {!sessionBooting && token && !character ? (
         <section className="panel card-center">
           <h2>Criar personagem</h2>
-          <p>Uma conta só pode ter um personagem neste protótipo.</p>
+          <p>Uma conta so pode ter um personagem neste prototipo.</p>
 
           <form onSubmit={onSubmitCharacter} className="stack-form">
             <label htmlFor="charName">Nome do personagem</label>
@@ -277,30 +344,136 @@ export default function App() {
       ) : null}
 
       {!sessionBooting && token && character ? (
-        <main className="game-layout">
-          <section className="panel info-panel">
-            <h2>Jogador</h2>
-            <p>
-              <strong>Conta:</strong> @{account?.username}
-            </p>
-            <p>
-              <strong>Personagem:</strong> {character.name}
-            </p>
-            <p>
-              <strong>HP:</strong> {character.hp}/{character.maxHp}
-            </p>
-            <p>
-              <strong>Instruções:</strong> WASD ou setas para andar.
-            </p>
-            <button type="button" className="btn-ghost" onClick={logout}>
-              Logout
-            </button>
-            {gameSocket.error ? <small className="error-text">Socket: {gameSocket.error}</small> : null}
+        <main className="arena-layout">
+          <aside className="panel players-panel">
+            <div className="panel-head">
+              <h2>Online</h2>
+              <span>{sortedPlayers.length}</span>
+            </div>
+
+            <div className="players-list">
+              {sortedPlayers.length === 0 ? <p className="empty-text">Aguardando jogadores...</p> : null}
+              {sortedPlayers.map((player) => (
+                <article
+                  key={player.id}
+                  className={`player-card ${player.id === selfPlayerId ? "self" : ""}`}
+                >
+                  <div className="player-card-top">
+                    <strong>{player.name}</strong>
+                    <small>
+                      ({Math.round(player.x)}, {Math.round(player.y)})
+                    </small>
+                  </div>
+                  <div className="hp-track">
+                    <span style={{ width: `${hpPercent(player)}%` }} />
+                  </div>
+                </article>
+              ))}
+            </div>
+          </aside>
+
+          <section className="center-column">
+            <section className="game-stage">
+              <GameCanvas
+                world={gameSocket.world}
+                selfPlayerId={selfPlayerId}
+                onMove={gameSocket.sendMove}
+                onAttack={gameSocket.sendAttack}
+              />
+            </section>
+
+            <section className="panel chat-panel">
+              <div className="panel-head">
+                <h2>Chat da sala</h2>
+                <span>{gameSocket.chatMessages.length} msgs</span>
+              </div>
+
+              <div ref={chatLogRef} className="chat-log">
+                {gameSocket.chatMessages.length === 0 ? (
+                  <p className="empty-text">Ninguem falou ainda.</p>
+                ) : (
+                  gameSocket.chatMessages.map((message) => (
+                    <p
+                      key={message.id}
+                      className={`chat-line ${message.playerId === selfPlayerId ? "self" : ""}`}
+                    >
+                      <span className="chat-meta">
+                        [{formatarHora(message.createdAt)}] {message.playerName}
+                      </span>
+                      <span>{message.text}</span>
+                    </p>
+                  ))
+                )}
+              </div>
+
+              <form onSubmit={onSubmitChat} className="chat-form">
+                <input
+                  value={chatInput}
+                  maxLength={CHAT_MAX_LENGTH}
+                  onChange={(event) => setChatInput(event.target.value)}
+                  placeholder="Digite e pressione Enter"
+                  autoComplete="off"
+                />
+                <button type="submit" disabled={chatBusy || !chatInput.trim()} className="btn-primary">
+                  {chatBusy ? "..." : "Enviar"}
+                </button>
+              </form>
+            </section>
           </section>
 
-          <section className="game-stage">
-            <GameCanvas world={gameSocket.world} selfPlayerId={selfPlayerId} onMove={gameSocket.sendMove} />
-          </section>
+          <aside className="right-column">
+            <section className="panel minimap-panel">
+              <div className="panel-head">
+                <h2>Mini mapa</h2>
+                <span>
+                  {minimapSize}x{minimapSize}
+                </span>
+              </div>
+
+              <div className="minimap-shell">
+                {gameSocket.world ? (
+                  <svg viewBox="0 0 100 100" role="img" aria-label="Mini mapa da sala">
+                    <rect x="0" y="0" width="100" height="100" className="mini-border" />
+                    {gameSocket.world.players.map((player) => (
+                      <circle
+                        key={player.id}
+                        cx={mapPercent(player.x, gameSocket.world?.mapSize ?? 1)}
+                        cy={mapPercent(player.y, gameSocket.world?.mapSize ?? 1)}
+                        r={player.id === selfPlayerId ? 3.8 : 2.8}
+                        className={player.id === selfPlayerId ? "mini-dot self" : "mini-dot"}
+                      />
+                    ))}
+                  </svg>
+                ) : (
+                  <p className="empty-text">Aguardando snapshot...</p>
+                )}
+              </div>
+            </section>
+
+            <section className="panel session-panel">
+              <h2>Sessao</h2>
+              <p>
+                <strong>Conta:</strong> @{account?.username}
+              </p>
+              <p>
+                <strong>Personagem:</strong> {character.name}
+              </p>
+              <p>
+                <strong>HP:</strong> {selfWorldPlayer?.hp ?? character.hp}/{selfWorldPlayer?.maxHp ?? character.maxHp}
+              </p>
+              <p>
+                <strong>Controles:</strong> WASD/setas para mover.
+              </p>
+              <p>
+                <strong>Ataque:</strong> clique no centro da arena para ativar mira; ataque com clique ou espaco.
+              </p>
+
+              <button type="button" className="btn-ghost" onClick={logout}>
+                Logout
+              </button>
+              {gameSocket.error ? <small className="error-text">Socket: {gameSocket.error}</small> : null}
+            </section>
+          </aside>
         </main>
       ) : null}
     </div>

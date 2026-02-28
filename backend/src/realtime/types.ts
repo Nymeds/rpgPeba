@@ -12,3 +12,19 @@ export type SessionReadyPayload = {
   playerName: string;
   mapSize: number;
 };
+
+export type ChatMessagePayload = {
+  id: number;
+  playerId: number;
+  playerName: string;
+  text: string;
+  createdAt: number;
+};
+
+export type ChatHistoryPayload = {
+  messages: ChatMessagePayload[];
+};
+
+export type ChatSendPayload = {
+  text: string;
+};

@@ -3,19 +3,26 @@ import type { Socket } from "socket.io-client";
 
 import { criarSocketJogo } from "../socket";
 import type {
+  ChatMessagePayload,
   ClientToServerEvents,
-  Direction,
+  MoveInput,
   ServerToClientEvents,
   SessionReadyPayload,
   WorldUpdatePayload
 } from "../types";
 
 type ConnectionStatus = "idle" | "connecting" | "connected" | "error";
+type AttackDirectionInput = {
+  dirX: number;
+  dirY: number;
+  range?: number;
+};
 
 export function useGameSocket(token: string | null, enabled: boolean) {
   const socketRef = useRef<Socket<ServerToClientEvents, ClientToServerEvents> | null>(null);
   const [session, setSession] = useState<SessionReadyPayload | null>(null);
   const [world, setWorld] = useState<WorldUpdatePayload | null>(null);
+  const [chatMessages, setChatMessages] = useState<ChatMessagePayload[]>([]);
   const [status, setStatus] = useState<ConnectionStatus>("idle");
   const [error, setError] = useState<string | null>(null);
 
@@ -25,6 +32,7 @@ export function useGameSocket(token: string | null, enabled: boolean) {
       socketRef.current = null;
       setSession(null);
       setWorld(null);
+      setChatMessages([]);
       setStatus("idle");
       setError(null);
       return;
@@ -50,6 +58,24 @@ export function useGameSocket(token: string | null, enabled: boolean) {
       setWorld(payload);
     });
 
+    socket.on("chat:history", (payload) => {
+      setChatMessages(payload.messages);
+    });
+
+    socket.on("chat:message", (payload) => {
+      setChatMessages((current) => {
+        if (current.some((entry) => entry.id === payload.id)) {
+          return current;
+        }
+
+        const next = [...current, payload];
+        if (next.length <= 120) {
+          return next;
+        }
+        return next.slice(next.length - 120);
+      });
+    });
+
     socket.on("connect_error", (socketError) => {
       setStatus("error");
       setError(socketError.message);
@@ -70,24 +96,57 @@ export function useGameSocket(token: string | null, enabled: boolean) {
     };
   }, [enabled, token]);
 
-  const sendMove = useCallback((direction: Direction | null) => {
+  const sendMove = useCallback((input: MoveInput) => {
     const socket = socketRef.current;
     if (!socket) {
       return;
     }
 
-    socket.emit("player:move", { direction }, (ack) => {
-      if (!ack.ok) {
-        console.warn(`[CLIENT][socket] player:move rejeitado: ${ack.error ?? "erro desconhecido"}`);
+    socket.emit("player:move", input);
+  }, []);
+
+  const sendAttack = useCallback((input: AttackDirectionInput) => {
+    const socket = socketRef.current;
+    if (!socket) {
+      return;
+    }
+
+    socket.emit(
+      "atack",
+      {
+        dirX: input.dirX,
+        dirY: input.dirY,
+        range: input.range ?? 1
+      },
+      (ack) => {
+        if (!ack.ok) {
+          console.warn(`[CLIENT][socket] atack rejeitado: ${ack.error ?? "erro desconhecido"}`);
+        }
       }
+    );
+  }, []);
+
+  const sendChat = useCallback((text: string): Promise<{ ok: boolean; error?: string }> => {
+    const socket = socketRef.current;
+    if (!socket) {
+      return Promise.resolve({ ok: false, error: "Socket desconectado." });
+    }
+
+    return new Promise((resolve) => {
+      socket.emit("chat:send", { text }, (ack) => {
+        resolve(ack);
+      });
     });
   }, []);
 
   return {
     session,
     world,
+    chatMessages,
     status,
     error,
-    sendMove
+    sendMove,
+    sendAttack,
+    sendChat
   };
 }

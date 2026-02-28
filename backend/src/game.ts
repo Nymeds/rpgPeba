@@ -35,7 +35,7 @@ export type PublicAttack = {
   ownerId: number;
   x: number;
   y: number;
-  size: number;
+  radius: number;
   expiresAt: number;
 };
 

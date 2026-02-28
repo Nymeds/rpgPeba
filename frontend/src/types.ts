@@ -52,7 +52,7 @@ export type PublicAttack = {
   ownerId: number;
   x: number;
   y: number;
-  size: number;
+  radius: number;
   expiresAt: number;
 };
 
@@ -69,14 +69,33 @@ export type SessionReadyPayload = {
   mapSize: number;
 };
 
+export type ChatMessagePayload = {
+  id: number;
+  playerId: number;
+  playerName: string;
+  text: string;
+  createdAt: number;
+};
+
+export type ChatHistoryPayload = {
+  messages: ChatMessagePayload[];
+};
+
+export type ChatSendPayload = {
+  text: string;
+};
+
 export type SocketAck = (response: { ok: boolean; error?: string }) => void;
 
 export type ServerToClientEvents = {
   "session:ready": (payload: SessionReadyPayload) => void;
   "world:update": (payload: WorldUpdatePayload) => void;
+  "chat:history": (payload: ChatHistoryPayload) => void;
+  "chat:message": (payload: ChatMessagePayload) => void;
 };
 
 export type ClientToServerEvents = {
   "player:move": (payload: MoveInput, ack?: SocketAck) => void;
-  atack: (payload: { x: number; y: number; range: number }, ack?: SocketAck) => void;
+  atack: (payload: { dirX: number; dirY: number; range?: number }, ack?: SocketAck) => void;
+  "chat:send": (payload: ChatSendPayload, ack?: SocketAck) => void;
 };

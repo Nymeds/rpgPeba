@@ -5,8 +5,13 @@ import { prisma } from "./db.js";
 import { MAP_SIZE, PlayerType, normalizarInventario } from "./game.js";
 import { logError, logInfo, logWarn } from "./logger.js";
 import { validarPayloadAtaque, validarPayloadMovimento } from "./schemas.js";
+import { appendChatMessage, buildChatHistoryPayload } from "./realtime/chat.js";
 import { emitWorldUpdate, startGameLoop } from "./realtime/gameLoop.js";
-import type { SessionReadyPayload, SocketAck } from "./realtime/types.js";
+import type {
+  ChatSendPayload,
+  SessionReadyPayload,
+  SocketAck
+} from "./realtime/types.js";
 import {
   collectDirtyStates,
   createPlayerAttack,
@@ -35,6 +40,7 @@ type SocketSession = {
 };
 
 let realtimeJaInicializado = false;
+const CHAT_MESSAGE_MAX_LENGTH = 220;
 
 function responder(confirmacao: SocketAck | undefined, ok: boolean, error?: string): void {
   if (ok) {
@@ -57,6 +63,27 @@ function extrairTokenHandshake(socket: Socket): string | null {
   }
 
   return null;
+}
+
+function parseChatPayload(payload: unknown): { ok: true; text: string } | { ok: false; error: string } {
+  if (!payload || typeof payload !== "object") {
+    return { ok: false, error: "Payload de chat invalido." };
+  }
+
+  const text = (payload as ChatSendPayload).text;
+  if (typeof text !== "string") {
+    return { ok: false, error: "Mensagem de chat deve ser string." };
+  }
+
+  const normalized = text.trim().replace(/\s+/g, " ");
+  if (normalized.length === 0) {
+    return { ok: false, error: "Mensagem vazia." };
+  }
+
+  return {
+    ok: true,
+    text: normalized.slice(0, CHAT_MESSAGE_MAX_LENGTH)
+  };
 }
 
 async function persistirPosicoesPendentes(app: FastifyInstance, motivo: string): Promise<void> {
@@ -237,8 +264,10 @@ export function registrarEventosSocket(app: FastifyInstance, io: SocketIOServer)
       playerName: session.characterName,
       mapSize: MAP_SIZE
     };
+    const chatHistoryPayload = buildChatHistoryPayload();
 
     socket.emit("session:ready", sessionReadyPayload);
+    socket.emit("chat:history", chatHistoryPayload);
     emitWorldUpdate(io, 0);
 
     logInfo("SOCKET", "Player conectado", {
@@ -294,26 +323,52 @@ export function registrarEventosSocket(app: FastifyInstance, io: SocketIOServer)
         return;
       }
 
-      const range = parsedAtack.data.range ?? 2;
-      const created = createPlayerAttack(socket.id, range);
-      if (!created) {
-        responder(confirmacao, false, "Nao foi possivel criar ataque.");
+      const range = parsedAtack.data.range ?? 1;
+      const createdResult = createPlayerAttack(
+        socket.id,
+        { x: parsedAtack.data.dirX, y: parsedAtack.data.dirY },
+        range
+      );
+      if (!createdResult.ok) {
+        responder(confirmacao, false, createdResult.error);
         return;
       }
+      const created = createdResult.attack;
 
       logInfo("ATACK", "Ataque criado", {
         player: created.ownerName,
         attackId: created.attackId,
-        facing: created.facing,
+        direction: `(${created.directionX.toFixed(2)},${created.directionY.toFixed(2)})`,
         range: created.range,
         attackPos: `(${created.x},${created.y})`,
-        clientPos:
-          parsedAtack.data.x !== undefined && parsedAtack.data.y !== undefined
-            ? `(${parsedAtack.data.x.toFixed(2)},${parsedAtack.data.y.toFixed(2)})`
-            : "nao informado"
+        radius: created.radius.toFixed(2)
       });
 
       responder(confirmacao, true);
+    });
+
+    socket.on("chat:send", (payload: unknown, confirmacao?: SocketAck) => {
+      const parsedChat = parseChatPayload(payload);
+      if (!parsedChat.ok) {
+        responder(confirmacao, false, parsedChat.error);
+        logWarn("CHAT", "Mensagem invalida", {
+          player: session.characterName,
+          socket: socket.id,
+          error: parsedChat.error
+        });
+        return;
+      }
+
+      const message = appendChatMessage(session.characterId, session.characterName, parsedChat.text);
+      io.emit("chat:message", message);
+      responder(confirmacao, true);
+
+      logInfo("CHAT", "Mensagem enviada", {
+        player: session.characterName,
+        socket: socket.id,
+        messageId: message.id,
+        chars: message.text.length
+      });
     });
 
     socket.on("disconnect", (reason) => {
