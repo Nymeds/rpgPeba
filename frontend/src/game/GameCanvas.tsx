@@ -18,8 +18,9 @@ const PLAYER_INTERPOLATION_RATE = 16;
 const CAMERA_INTERPOLATION_RATE = 12;
 const AIM_VECTOR_SENSITIVITY = 0.025;
 const ATTACK_RANGE_TILES = 1;
-const WARRIOR_ATTACK_ANIMATION_MS = 5000;
-const MONK_HEAL_ANIMATION_MS = 4000;
+const ATTACK_AIM_GAP_PX = 10;
+const WARRIOR_ATTACK_VISUAL_MS = 400;
+const MONK_HEAL_VISUAL_MS = 700;
 
 type CameraState = {
   x: number;
@@ -153,8 +154,9 @@ export default function GameCanvas({ world, selfPlayerId, onMove, onAttack }: Ga
   const onMoveRef = useRef(onMove);
   const aimVectorRef = useRef<{ x: number; y: number }>({ x: 1, y: 0 });
   const attackAnimationByOwnerRef = useRef<
-    Map<number, { attackId: number; kind: "damage" | "heal"; startedAtMs: number; endsAtMs: number }>
+    Map<number, { attackId: number; kind: "damage" | "heal"; phaseTwo: boolean; endsAtMs: number }>
   >(new Map());
+  const nextAttackPhaseTwoByOwnerRef = useRef<Map<number, boolean>>(new Map());
 
   const [overlaySprites, setOverlaySprites] = useState<OverlaySprite[]>([]);
   const [overlayHealEffects, setOverlayHealEffects] = useState<OverlayHealEffect[]>([]);
@@ -188,14 +190,17 @@ export default function GameCanvas({ world, selfPlayerId, onMove, onAttack }: Ga
     }
     const centerX = selfSprite.left + selfSprite.size / 2;
     const centerY = selfSprite.top + selfSprite.size / 2;
+    const gap = Math.max(ATTACK_AIM_GAP_PX, selfSprite.size * 0.13);
     const radius = selfSprite.size * 0.58;
     const angle = angleDegFromVector(aimVector.x, aimVector.y);
+    const lineStartX = centerX + aimVector.x * gap;
+    const lineStartY = centerY + aimVector.y * gap;
     return {
-      lineLeft: centerX,
-      lineTop: centerY,
+      lineLeft: lineStartX,
+      lineTop: lineStartY,
       lineWidth: radius,
-      tipLeft: centerX + aimVector.x * radius,
-      tipTop: centerY + aimVector.y * radius,
+      tipLeft: lineStartX + aimVector.x * radius,
+      tipTop: lineStartY + aimVector.y * radius,
       angle
     };
   }, [aimLocked, aimVector, selfSprite]);
@@ -323,6 +328,7 @@ export default function GameCanvas({ world, selfPlayerId, onMove, onAttack }: Ga
       if (!currentWorld || !currentSelfId) {
         renderedPlayersRef.current.clear();
         attackAnimationByOwnerRef.current.clear();
+        nextAttackPhaseTwoByOwnerRef.current.clear();
         setOverlaySprites([]);
         setOverlayHealEffects([]);
         context.fillStyle = "#f3f6f8";
@@ -487,22 +493,24 @@ export default function GameCanvas({ world, selfPlayerId, onMove, onAttack }: Ga
       setOverlayHealEffects(nextHealEffects);
 
       const attackAnimations = attackAnimationByOwnerRef.current;
+      const nextAttackPhaseTwoByOwner = nextAttackPhaseTwoByOwnerRef.current;
       for (const attack of currentWorld.attacks) {
         const existing = attackAnimations.get(attack.ownerId);
+        // Cada attackId deve disparar a animacao visual apenas uma vez.
+        // Mesmo que o ataque continue ativo no snapshot do servidor, nao reiniciamos o GIF.
         if (!existing || existing.attackId !== attack.id) {
           const animationDurationMs =
-            attack.kind === "heal" ? MONK_HEAL_ANIMATION_MS : WARRIOR_ATTACK_ANIMATION_MS;
+            attack.kind === "heal" ? MONK_HEAL_VISUAL_MS : WARRIOR_ATTACK_VISUAL_MS;
+          // Variacao visual entre ataques consecutivos:
+          // se esse ataque usar "attack1", o proximo do mesmo player usa "attack2".
+          const phaseTwo = nextAttackPhaseTwoByOwner.get(attack.ownerId) ?? false;
+          nextAttackPhaseTwoByOwner.set(attack.ownerId, !phaseTwo);
           attackAnimations.set(attack.ownerId, {
             attackId: attack.id,
             kind: attack.kind,
-            startedAtMs: wallNowMs,
+            phaseTwo,
             endsAtMs: wallNowMs + animationDurationMs
           });
-        }
-      }
-      for (const [ownerId, animation] of attackAnimations.entries()) {
-        if (animation.endsAtMs <= wallNowMs) {
-          attackAnimations.delete(ownerId);
         }
       }
 
@@ -515,10 +523,7 @@ export default function GameCanvas({ world, selfPlayerId, onMove, onAttack }: Ga
         const drawY = Math.round(floorY - spriteSize);
         const attackAnimation = attackAnimations.get(player.id) ?? null;
         const attacking = Boolean(attackAnimation && attackAnimation.endsAtMs > wallNowMs);
-        const attackPhaseTwo = attacking
-          ? wallNowMs - (attackAnimation?.startedAtMs ?? wallNowMs) >=
-            ((attackAnimation?.endsAtMs ?? wallNowMs) - (attackAnimation?.startedAtMs ?? wallNowMs)) / 2
-          : false;
+        const attackPhaseTwo = attacking ? (attackAnimation?.phaseTwo ?? false) : false;
         sprites.push({
           id: player.id,
           name: player.name,
