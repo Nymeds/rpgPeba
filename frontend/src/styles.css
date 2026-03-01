@@ -590,6 +590,277 @@ input:focus {
   z-index: 4;
 }
 
+.map-editor-panel-wrap {
+  margin-top: 10px;
+}
+
+.map-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.map-editor-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.map-editor-head h3 {
+  margin: 0;
+  font-family: "Rajdhani", sans-serif;
+  font-size: 1.3rem;
+}
+
+.map-editor-head p {
+  margin: 4px 0 0;
+  color: var(--ink-soft);
+  font-size: 0.84rem;
+}
+
+.map-editor-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.map-editor-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.map-editor-meta label,
+.map-editor-block label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.map-editor-grid {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.map-editor-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.map-editor-block {
+  border: 1px solid rgba(117, 162, 212, 0.28);
+  border-radius: 10px;
+  background: rgba(8, 14, 22, 0.7);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.map-editor-block h4 {
+  margin: 0;
+  font-family: "Rajdhani", sans-serif;
+  font-size: 1.04rem;
+}
+
+.map-editor-block-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.map-editor-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 260px;
+  overflow: auto;
+}
+
+.map-editor-layer {
+  border: 1px solid rgba(108, 155, 208, 0.26);
+  border-radius: 8px;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.map-editor-layer.active {
+  border-color: rgba(78, 240, 111, 0.58);
+}
+
+.map-editor-layer-actions {
+  display: flex;
+  gap: 5px;
+}
+
+.map-editor-layer-actions .btn-ghost {
+  padding: 5px 8px;
+}
+
+.inline-check {
+  display: inline-flex !important;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink-soft);
+  font-size: 0.82rem;
+}
+
+.map-editor-objects {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  max-height: 280px;
+  overflow: auto;
+}
+
+.map-editor-object {
+  border: 1px solid rgba(106, 153, 207, 0.28);
+  border-radius: 8px;
+  background: rgba(8, 15, 23, 0.85);
+  color: var(--ink);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.map-editor-object.active {
+  border-color: rgba(78, 240, 111, 0.7);
+}
+
+.map-editor-object img {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  object-fit: contain;
+  border: 1px solid rgba(95, 141, 194, 0.25);
+  border-radius: 6px;
+}
+
+.map-editor-object strong {
+  font-size: 0.82rem;
+  line-height: 1.2;
+}
+
+.map-editor-object small {
+  color: var(--ink-soft);
+}
+
+.map-editor-crop-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.map-editor-crop-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  background: rgba(2, 8, 13, 0.8);
+  padding: 12px;
+}
+
+.map-editor-crop-modal {
+  width: min(560px, 100%);
+  border: 1px solid rgba(120, 167, 226, 0.4);
+  border-radius: 12px;
+  background: rgba(8, 14, 22, 0.96);
+  box-shadow: 0 22px 45px rgba(1, 5, 9, 0.55);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.map-editor-crop-modal header h4 {
+  margin: 0;
+  font-family: "Rajdhani", sans-serif;
+  font-size: 1.12rem;
+}
+
+.map-editor-crop-modal header p {
+  margin: 2px 0 0;
+  color: var(--ink-soft);
+  font-size: 0.84rem;
+}
+
+.map-editor-crop-canvas {
+  width: min(460px, 100%);
+  max-width: 100%;
+  align-self: center;
+  aspect-ratio: 1 / 1;
+  border: 1px solid rgba(120, 166, 225, 0.36);
+  border-radius: 8px;
+  background: rgba(6, 10, 16, 0.9);
+  cursor: crosshair;
+}
+
+.map-editor-crop-tools {
+  display: grid;
+  grid-template-columns: 1fr minmax(120px, 180px);
+  gap: 8px;
+  align-items: end;
+}
+
+.map-editor-crop-new-object {
+  border: 1px solid rgba(109, 156, 214, 0.28);
+  border-radius: 10px;
+  padding: 8px;
+  background: rgba(7, 12, 19, 0.72);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.map-editor-crop-new-object h5 {
+  margin: 0;
+  font-family: "Rajdhani", sans-serif;
+  font-size: 1rem;
+}
+
+.map-editor-crop-new-object-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.map-editor-crop-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.map-editor-canvas-shell {
+  border: 1px solid rgba(108, 153, 209, 0.35);
+  border-radius: 10px;
+  background: rgba(9, 14, 20, 0.86);
+  overflow: auto;
+  max-height: 640px;
+}
+
+.map-editor-canvas {
+  display: block;
+  cursor: crosshair;
+}
+
+.map-editor-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  color: var(--ink-soft);
+  font-size: 0.84rem;
+}
+
 @media (max-width: 1180px) {
   .arena-layout {
     grid-template-columns: 220px minmax(0, 1fr);
@@ -623,6 +894,22 @@ input:focus {
 
   .map-shell {
     aspect-ratio: 4 / 3;
+  }
+
+  .map-editor-meta {
+    grid-template-columns: 1fr;
+  }
+
+  .map-editor-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .map-editor-crop-tools {
+    grid-template-columns: 1fr;
+  }
+
+  .map-editor-crop-new-object-grid {
+    grid-template-columns: 1fr;
   }
 }
 

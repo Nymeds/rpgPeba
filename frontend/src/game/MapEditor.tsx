@@ -1,0 +1,1343 @@
+import { type ChangeEvent, type MouseEvent, useEffect, useMemo, useRef, useState } from "react";
+
+import type { GameMapDefinition, MapLayerDefinition, MapObjectDefinition } from "../types";
+
+const EDITOR_TILE_SIZE = 22;
+const CROP_EDITOR_CANVAS_SIZE = 460;
+
+type MapEditorProps = {
+  map: GameMapDefinition;
+  onSave: (map: Omit<GameMapDefinition, "updatedAt">) => Promise<void>;
+  onClose: () => void;
+};
+
+function cloneMap(map: GameMapDefinition): GameMapDefinition {
+  return {
+    ...map,
+    objects: map.objects.map((entry) => ({ ...entry })),
+    layers: map.layers.map((layer) => ({
+      ...layer,
+      tiles: layer.tiles.map((row) => [...row])
+    }))
+  };
+}
+
+function criarLayerVazia(mapSize: number, id: string, name: string): MapLayerDefinition {
+  return {
+    id,
+    name,
+    visible: true,
+    tiles: Array.from({ length: mapSize }, () => Array.from({ length: mapSize }, () => null))
+  };
+}
+
+function criarId(prefix: string): string {
+  const random = Math.random().toString(36).slice(2, 8);
+  return `${prefix}-${Date.now()}-${random}`;
+}
+
+function lerArquivoImagem(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ""));
+    reader.onerror = () => reject(new Error("Falha ao ler o arquivo de imagem."));
+    reader.readAsDataURL(file);
+  });
+}
+
+function parseNullableInt(value: string, min: number, max: number): number | null {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    return null;
+  }
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed)) {
+    return null;
+  }
+  const normalized = Math.round(parsed);
+  return Math.min(max, Math.max(min, normalized));
+}
+
+type CropRect = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+type CropViewport = {
+  drawX: number;
+  drawY: number;
+  drawWidth: number;
+  drawHeight: number;
+  scale: number;
+};
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function normalizeCropRect(rect: CropRect, imageWidth: number, imageHeight: number): CropRect {
+  const maxWidth = Math.max(1, Math.floor(imageWidth));
+  const maxHeight = Math.max(1, Math.floor(imageHeight));
+  const x = clamp(Math.floor(rect.x), 0, maxWidth - 1);
+  const y = clamp(Math.floor(rect.y), 0, maxHeight - 1);
+  const width = clamp(Math.floor(rect.width), 1, maxWidth - x);
+  const height = clamp(Math.floor(rect.height), 1, maxHeight - y);
+  return { x, y, width, height };
+}
+
+function alignCropRectToGrid(rect: CropRect, cellSize: number, imageWidth: number, imageHeight: number): CropRect {
+  const safeCellSize = Math.max(1, Math.round(cellSize));
+  const startX = Math.floor(rect.x / safeCellSize) * safeCellSize;
+  const startY = Math.floor(rect.y / safeCellSize) * safeCellSize;
+  const endX = Math.ceil((rect.x + rect.width) / safeCellSize) * safeCellSize;
+  const endY = Math.ceil((rect.y + rect.height) / safeCellSize) * safeCellSize;
+  return normalizeCropRect({ x: startX, y: startY, width: endX - startX, height: endY - startY }, imageWidth, imageHeight);
+}
+
+function gerarDataUrlRecorte(image: HTMLImageElement, rect: CropRect): string | null {
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(rect.width));
+  canvas.height = Math.max(1, Math.round(rect.height));
+  const context = canvas.getContext("2d");
+  if (!context) {
+    return null;
+  }
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  context.drawImage(image, rect.x, rect.y, rect.width, rect.height, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL("image/png");
+}
+
+export default function MapEditor({ map, onSave, onClose }: MapEditorProps) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const imageCacheRef = useRef<Map<string, HTMLImageElement>>(new Map());
+  const drawingRef = useRef(false);
+  const drawingEraseRef = useRef(false);
+  const lastTileRef = useRef<string | null>(null);
+  const cropCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const cropImageRef = useRef<HTMLImageElement | null>(null);
+  const cropViewportRef = useRef<CropViewport | null>(null);
+  const cropDraggingRef = useRef(false);
+  const cropDragStartRef = useRef<{ x: number; y: number } | null>(null);
+
+  const [draft, setDraft] = useState<GameMapDefinition>(() => cloneMap(map));
+  const [activeLayerId, setActiveLayerId] = useState<string>(map.layers[0]?.id ?? "");
+  const [activeObjectId, setActiveObjectId] = useState<string>(map.objects[0]?.id ?? "");
+  const [saving, setSaving] = useState(false);
+  const [status, setStatus] = useState<string>("");
+
+  const [newObjectName, setNewObjectName] = useState("Novo objeto");
+  const [newObjectMaskWidth, setNewObjectMaskWidth] = useState(1);
+  const [newObjectMaskHeight, setNewObjectMaskHeight] = useState(1);
+  const [newObjectSolid, setNewObjectSolid] = useState(false);
+  const [newObjectImageDataUrl, setNewObjectImageDataUrl] = useState("");
+  const [cropEditorObjectId, setCropEditorObjectId] = useState<string | null>(null);
+  const [cropSelection, setCropSelection] = useState<CropRect | null>(null);
+  const [cropGridEnabled, setCropGridEnabled] = useState(false);
+  const [cropGridCellSize, setCropGridCellSize] = useState(192);
+  const [cropNewObjectName, setCropNewObjectName] = useState("");
+  const [cropNewObjectMaskWidth, setCropNewObjectMaskWidth] = useState(1);
+  const [cropNewObjectMaskHeight, setCropNewObjectMaskHeight] = useState(1);
+  const [cropNewObjectSolid, setCropNewObjectSolid] = useState(false);
+
+  useEffect(() => {
+    setDraft(cloneMap(map));
+    setActiveLayerId(map.layers[0]?.id ?? "");
+    setActiveObjectId(map.objects[0]?.id ?? "");
+    setCropEditorObjectId(null);
+    setCropSelection(null);
+    setCropGridEnabled(false);
+    setCropGridCellSize(192);
+    setCropNewObjectName("");
+    setCropNewObjectMaskWidth(1);
+    setCropNewObjectMaskHeight(1);
+    setCropNewObjectSolid(false);
+    setStatus("");
+  }, [map]);
+
+  useEffect(() => {
+    if (draft.layers.some((layer) => layer.id === activeLayerId)) {
+      return;
+    }
+    setActiveLayerId(draft.layers[0]?.id ?? "");
+  }, [activeLayerId, draft.layers]);
+
+  useEffect(() => {
+    if (draft.objects.some((object) => object.id === activeObjectId)) {
+      return;
+    }
+    setActiveObjectId(draft.objects[0]?.id ?? "");
+  }, [activeObjectId, draft.objects]);
+
+  const activeLayerIndex = useMemo(
+    () => draft.layers.findIndex((layer) => layer.id === activeLayerId),
+    [activeLayerId, draft.layers]
+  );
+  const activeObject = useMemo(
+    () => draft.objects.find((entry) => entry.id === activeObjectId) ?? null,
+    [activeObjectId, draft.objects]
+  );
+  const cropEditorObject = useMemo(
+    () => draft.objects.find((entry) => entry.id === cropEditorObjectId) ?? null,
+    [cropEditorObjectId, draft.objects]
+  );
+
+  function updateObjectById(objectId: string, mutator: (object: MapObjectDefinition) => void): void {
+    setDraft((current) => {
+      const index = current.objects.findIndex((entry) => entry.id === objectId);
+      if (index < 0) {
+        return current;
+      }
+      const next = cloneMap(current);
+      mutator(next.objects[index]);
+      return next;
+    });
+  }
+
+  function updateActiveObject(mutator: (object: MapObjectDefinition) => void): void {
+    if (!activeObjectId) {
+      return;
+    }
+    updateObjectById(activeObjectId, mutator);
+  }
+
+  function abrirEditorRecorte(objectId: string): void {
+    const object = draft.objects.find((entry) => entry.id === objectId);
+    if (!object) {
+      return;
+    }
+    setActiveObjectId(objectId);
+    setCropEditorObjectId(objectId);
+    setCropSelection(null);
+    setCropGridEnabled(false);
+    setCropGridCellSize(192);
+    setCropNewObjectName(`${object.name} recorte`);
+    setCropNewObjectMaskWidth(object.maskWidth);
+    setCropNewObjectMaskHeight(object.maskHeight);
+    setCropNewObjectSolid(object.solid);
+    cropDraggingRef.current = false;
+    cropDragStartRef.current = null;
+  }
+
+  function fecharEditorRecorte(): void {
+    setCropEditorObjectId(null);
+    setCropSelection(null);
+    cropDraggingRef.current = false;
+    cropDragStartRef.current = null;
+    cropImageRef.current = null;
+    cropViewportRef.current = null;
+  }
+
+  function obterRecorteAtual(image: HTMLImageElement): CropRect {
+    const fallback = { x: 0, y: 0, width: image.width, height: image.height };
+    const normalized = normalizeCropRect(cropSelection ?? fallback, image.width, image.height);
+    if (!cropGridEnabled) {
+      return normalized;
+    }
+    return alignCropRectToGrid(normalized, cropGridCellSize, image.width, image.height);
+  }
+
+  function obterPontoNoEditorCrop(event: MouseEvent<HTMLCanvasElement>): { x: number; y: number } | null {
+    const canvas = cropCanvasRef.current;
+    const viewport = cropViewportRef.current;
+    const image = cropImageRef.current;
+    if (!canvas || !viewport || !image) {
+      return null;
+    }
+
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / Math.max(1, rect.width);
+    const scaleY = canvas.height / Math.max(1, rect.height);
+    const localX = (event.clientX - rect.left) * scaleX;
+    const localY = (event.clientY - rect.top) * scaleY;
+    const clampedX = clamp(localX, viewport.drawX, viewport.drawX + viewport.drawWidth);
+    const clampedY = clamp(localY, viewport.drawY, viewport.drawY + viewport.drawHeight);
+    const imageX = clamp(Math.floor((clampedX - viewport.drawX) / viewport.scale), 0, Math.max(0, image.width - 1));
+    const imageY = clamp(Math.floor((clampedY - viewport.drawY) / viewport.scale), 0, Math.max(0, image.height - 1));
+    return { x: imageX, y: imageY };
+  }
+
+  function handleCropMouseDown(event: MouseEvent<HTMLCanvasElement>): void {
+    if (event.button !== 0) {
+      return;
+    }
+    const point = obterPontoNoEditorCrop(event);
+    if (!point) {
+      return;
+    }
+    event.preventDefault();
+    cropDraggingRef.current = true;
+    cropDragStartRef.current = point;
+    const image = cropImageRef.current;
+    if (!image) {
+      return;
+    }
+    const baseRect = normalizeCropRect({ x: point.x, y: point.y, width: 1, height: 1 }, image.width, image.height);
+    if (cropGridEnabled) {
+      setCropSelection(alignCropRectToGrid(baseRect, cropGridCellSize, image.width, image.height));
+      return;
+    }
+    setCropSelection(baseRect);
+  }
+
+  function handleCropMouseMove(event: MouseEvent<HTMLCanvasElement>): void {
+    if (!cropDraggingRef.current) {
+      return;
+    }
+    const point = obterPontoNoEditorCrop(event);
+    const start = cropDragStartRef.current;
+    const image = cropImageRef.current;
+    if (!point || !start || !image) {
+      return;
+    }
+
+    // Arraste cria um retangulo em pixels da imagem original (nao no tamanho do canvas).
+    const x = Math.min(start.x, point.x);
+    const y = Math.min(start.y, point.y);
+    const width = Math.abs(point.x - start.x) + 1;
+    const height = Math.abs(point.y - start.y) + 1;
+    const baseRect = normalizeCropRect({ x, y, width, height }, image.width, image.height);
+    if (cropGridEnabled) {
+      // Com grid ativa, o recorte "encaixa" nas celulas configuradas.
+      setCropSelection(alignCropRectToGrid(baseRect, cropGridCellSize, image.width, image.height));
+      return;
+    }
+    setCropSelection(baseRect);
+  }
+
+  function handleCropMouseUp(): void {
+    cropDraggingRef.current = false;
+    cropDragStartRef.current = null;
+  }
+
+  function selecionarImagemInteiraNoRecorte(): void {
+    const image = cropImageRef.current;
+    if (image) {
+      setCropSelection({ x: 0, y: 0, width: image.width, height: image.height });
+    } else {
+      setCropSelection(null);
+    }
+  }
+
+  function salvarRecorteNoObjetoAtual(): void {
+    if (!cropEditorObject) {
+      return;
+    }
+    const image = cropImageRef.current;
+    if (!image) {
+      return;
+    }
+    const nextCrop = obterRecorteAtual(image);
+    const dataUrl = gerarDataUrlRecorte(image, nextCrop);
+    if (!dataUrl) {
+      setStatus("Falha ao gerar imagem recortada.");
+      return;
+    }
+
+    const objectName = cropEditorObject.name;
+    updateObjectById(cropEditorObject.id, (object) => {
+      object.imageDataUrl = dataUrl;
+      object.cropX = null;
+      object.cropY = null;
+      object.cropWidth = null;
+      object.cropHeight = null;
+    });
+    imageCacheRef.current.delete(cropEditorObject.id);
+
+    setStatus(`Imagem de "${objectName}" sobrescrita com o recorte.`);
+    fecharEditorRecorte();
+  }
+
+  function salvarRecorteComoNovoObjeto(): void {
+    if (!cropEditorObject) {
+      return;
+    }
+    const image = cropImageRef.current;
+    if (!image) {
+      return;
+    }
+
+    const name = cropNewObjectName.trim();
+    if (!name) {
+      setStatus("Nome do novo objeto e obrigatorio para salvar o recorte.");
+      return;
+    }
+
+    const nextCrop = obterRecorteAtual(image);
+    const dataUrl = gerarDataUrlRecorte(image, nextCrop);
+    if (!dataUrl) {
+      setStatus("Falha ao gerar imagem recortada.");
+      return;
+    }
+
+    const object: MapObjectDefinition = {
+      id: criarId("obj"),
+      name,
+      imageDataUrl: dataUrl,
+      maskWidth: Math.max(1, Math.min(8, Math.round(cropNewObjectMaskWidth || 1))),
+      maskHeight: Math.max(1, Math.min(8, Math.round(cropNewObjectMaskHeight || 1))),
+      solid: cropNewObjectSolid,
+      cropX: null,
+      cropY: null,
+      cropWidth: null,
+      cropHeight: null
+    };
+
+    setDraft((current) => ({
+      ...current,
+      objects: [...current.objects, object]
+    }));
+    setActiveObjectId(object.id);
+    setStatus(`Novo objeto "${object.name}" criado a partir do recorte.`);
+    fecharEditorRecorte();
+  }
+
+  function paintAt(tileX: number, tileY: number, erase: boolean): void {
+    const mapSize = draft.mapSize;
+    if (tileX < 0 || tileY < 0 || tileX >= mapSize || tileY >= mapSize) {
+      return;
+    }
+
+    setDraft((current) => {
+      const layerIndex = current.layers.findIndex((layer) => layer.id === activeLayerId);
+      if (layerIndex < 0) {
+        return current;
+      }
+
+      const next = cloneMap(current);
+      const layer = next.layers[layerIndex];
+
+      if (erase || !activeObject) {
+        layer.tiles[tileY][tileX] = null;
+        return next;
+      }
+
+      // Tecnico: O brush ancora em 1 slot, mas aplica a mascara do objeto (w/h) na grid.
+      // Crianca: Pinta um quadradinho de cada vez, ocupando o tamanhinho do objeto.
+      for (let dy = 0; dy < activeObject.maskHeight; dy += 1) {
+        const y = tileY + dy;
+        if (y < 0 || y >= mapSize) {
+          continue;
+        }
+        for (let dx = 0; dx < activeObject.maskWidth; dx += 1) {
+          const x = tileX + dx;
+          if (x < 0 || x >= mapSize) {
+            continue;
+          }
+          layer.tiles[y][x] = activeObject.id;
+        }
+      }
+
+      return next;
+    });
+  }
+
+  function preencherLayerAtivaComObjetoSelecionado(): void {
+    if (!activeObject) {
+      setStatus("Selecione um objeto para preencher a grid.");
+      return;
+    }
+
+    setDraft((current) => {
+      const layerIndex = current.layers.findIndex((layer) => layer.id === activeLayerId);
+      if (layerIndex < 0) {
+        return current;
+      }
+
+      const next = cloneMap(current);
+      const layer = next.layers[layerIndex];
+      for (let y = 0; y < next.mapSize; y += 1) {
+        for (let x = 0; x < next.mapSize; x += 1) {
+          layer.tiles[y][x] = activeObject.id;
+        }
+      }
+      return next;
+    });
+
+    const layerName = activeLayerIndex >= 0 ? draft.layers[activeLayerIndex].name : "layer ativa";
+    setStatus(`Layer "${layerName}" preenchida com "${activeObject.name}".`);
+  }
+
+  function obterTileDoMouse(event: MouseEvent<HTMLCanvasElement>): { x: number; y: number } | null {
+    const canvas = canvasRef.current;
+    if (!canvas) {
+      return null;
+    }
+    const rect = canvas.getBoundingClientRect();
+    const x = Math.floor((event.clientX - rect.left) / EDITOR_TILE_SIZE);
+    const y = Math.floor((event.clientY - rect.top) / EDITOR_TILE_SIZE);
+    if (x < 0 || y < 0 || x >= draft.mapSize || y >= draft.mapSize) {
+      return null;
+    }
+    return { x, y };
+  }
+
+  function handleMouseDown(event: MouseEvent<HTMLCanvasElement>): void {
+    if (event.button !== 0 && event.button !== 2) {
+      return;
+    }
+    const tile = obterTileDoMouse(event);
+    if (!tile) {
+      return;
+    }
+    const erase = event.button === 2;
+    drawingRef.current = true;
+    drawingEraseRef.current = erase;
+    lastTileRef.current = `${tile.x}:${tile.y}:${erase ? "erase" : "paint"}`;
+    paintAt(tile.x, tile.y, erase);
+  }
+
+  function handleMouseMove(event: MouseEvent<HTMLCanvasElement>): void {
+    if (!drawingRef.current) {
+      return;
+    }
+    const tile = obterTileDoMouse(event);
+    if (!tile) {
+      return;
+    }
+    const erase = drawingEraseRef.current;
+    const key = `${tile.x}:${tile.y}:${erase ? "erase" : "paint"}`;
+    if (lastTileRef.current === key) {
+      return;
+    }
+    lastTileRef.current = key;
+    paintAt(tile.x, tile.y, erase);
+  }
+
+  function handleMouseUp(): void {
+    drawingRef.current = false;
+    drawingEraseRef.current = false;
+    lastTileRef.current = null;
+  }
+
+  useEffect(() => {
+    const handleUp = () => {
+      drawingRef.current = false;
+      drawingEraseRef.current = false;
+      lastTileRef.current = null;
+      cropDraggingRef.current = false;
+      cropDragStartRef.current = null;
+    };
+    window.addEventListener("mouseup", handleUp);
+    return () => {
+      window.removeEventListener("mouseup", handleUp);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!cropEditorObject) {
+      cropImageRef.current = null;
+      cropViewportRef.current = null;
+      return;
+    }
+
+    let cancelled = false;
+    const image = new Image();
+    image.onload = () => {
+      if (cancelled) {
+        return;
+      }
+      cropImageRef.current = image;
+      const hasStoredCrop =
+        cropEditorObject.cropWidth !== null &&
+        cropEditorObject.cropHeight !== null &&
+        cropEditorObject.cropWidth > 0 &&
+        cropEditorObject.cropHeight > 0;
+      if (hasStoredCrop) {
+        setCropSelection(
+          normalizeCropRect(
+            {
+              x: cropEditorObject.cropX ?? 0,
+              y: cropEditorObject.cropY ?? 0,
+              width: cropEditorObject.cropWidth ?? image.width,
+              height: cropEditorObject.cropHeight ?? image.height
+            },
+            image.width,
+            image.height
+          )
+        );
+      } else {
+        setCropSelection({ x: 0, y: 0, width: image.width, height: image.height });
+      }
+    };
+    image.onerror = () => {
+      if (!cancelled) {
+        setStatus("Falha ao abrir imagem no editor de recorte.");
+      }
+    };
+    image.src = cropEditorObject.imageDataUrl;
+
+    return () => {
+      cancelled = true;
+    };
+  }, [cropEditorObject]);
+
+  useEffect(() => {
+    const canvas = cropCanvasRef.current;
+    const image = cropImageRef.current;
+    if (!canvas || !image || !cropEditorObject) {
+      return;
+    }
+    const context = canvas.getContext("2d");
+    if (!context) {
+      return;
+    }
+
+    canvas.width = CROP_EDITOR_CANVAS_SIZE;
+    canvas.height = CROP_EDITOR_CANVAS_SIZE;
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.fillStyle = "#09101a";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+
+    const padding = 18;
+    const maxDrawWidth = canvas.width - padding * 2;
+    const maxDrawHeight = canvas.height - padding * 2;
+    const baseScale = Math.min(maxDrawWidth / Math.max(1, image.width), maxDrawHeight / Math.max(1, image.height));
+    const scale = Math.max(0.01, baseScale);
+    const drawWidth = image.width * scale;
+    const drawHeight = image.height * scale;
+    const drawX = (canvas.width - drawWidth) / 2;
+    const drawY = (canvas.height - drawHeight) / 2;
+
+    cropViewportRef.current = { drawX, drawY, drawWidth, drawHeight, scale };
+
+    context.drawImage(image, drawX, drawY, drawWidth, drawHeight);
+    context.strokeStyle = "rgba(130, 180, 242, 0.45)";
+    context.lineWidth = 1;
+    context.strokeRect(drawX, drawY, drawWidth, drawHeight);
+
+    const drawGridLines = (): void => {
+      if (!cropGridEnabled) {
+        return;
+      }
+      const safeCellSize = Math.max(1, Math.round(cropGridCellSize));
+      context.strokeStyle = "rgba(103, 186, 255, 0.36)";
+      context.lineWidth = 1;
+      for (let x = safeCellSize; x < image.width; x += safeCellSize) {
+        const px = drawX + x * scale;
+        context.beginPath();
+        context.moveTo(px, drawY);
+        context.lineTo(px, drawY + drawHeight);
+        context.stroke();
+      }
+      for (let y = safeCellSize; y < image.height; y += safeCellSize) {
+        const py = drawY + y * scale;
+        context.beginPath();
+        context.moveTo(drawX, py);
+        context.lineTo(drawX + drawWidth, py);
+        context.stroke();
+      }
+    };
+
+    if (cropSelection) {
+      const selection = obterRecorteAtual(image);
+      const selectionCanvasX = drawX + selection.x * scale;
+      const selectionCanvasY = drawY + selection.y * scale;
+      const selectionCanvasWidth = selection.width * scale;
+      const selectionCanvasHeight = selection.height * scale;
+
+      context.fillStyle = "rgba(6, 10, 14, 0.62)";
+      context.fillRect(drawX, drawY, drawWidth, drawHeight);
+      context.drawImage(
+        image,
+        selection.x,
+        selection.y,
+        selection.width,
+        selection.height,
+        selectionCanvasX,
+        selectionCanvasY,
+        selectionCanvasWidth,
+        selectionCanvasHeight
+      );
+      context.strokeStyle = "rgba(117, 242, 157, 0.95)";
+      context.lineWidth = 2;
+      context.strokeRect(selectionCanvasX, selectionCanvasY, selectionCanvasWidth, selectionCanvasHeight);
+    }
+
+    drawGridLines();
+  }, [cropEditorObject, cropSelection, cropGridEnabled, cropGridCellSize]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) {
+      return;
+    }
+    const context = canvas.getContext("2d");
+    if (!context) {
+      return;
+    }
+
+    canvas.width = draft.mapSize * EDITOR_TILE_SIZE;
+    canvas.height = draft.mapSize * EDITOR_TILE_SIZE;
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.fillStyle = "#0f1721";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+
+    const objectById = new Map<string, MapObjectDefinition>(draft.objects.map((entry) => [entry.id, entry]));
+
+    for (const layer of draft.layers) {
+      if (!layer.visible) {
+        continue;
+      }
+      for (let y = 0; y < draft.mapSize; y += 1) {
+        for (let x = 0; x < draft.mapSize; x += 1) {
+          const objectId = layer.tiles[y]?.[x] ?? null;
+          if (!objectId) {
+            continue;
+          }
+          const object = objectById.get(objectId);
+          if (!object) {
+            continue;
+          }
+
+          let image = imageCacheRef.current.get(object.id);
+          if (!image) {
+            image = new Image();
+            image.src = object.imageDataUrl;
+            imageCacheRef.current.set(object.id, image);
+          }
+
+          const drawX = x * EDITOR_TILE_SIZE;
+          const drawY = y * EDITOR_TILE_SIZE;
+          if (image.complete) {
+            if (
+              object.cropWidth !== null &&
+              object.cropHeight !== null &&
+              object.cropWidth > 0 &&
+              object.cropHeight > 0
+            ) {
+              context.drawImage(
+                image,
+                object.cropX ?? 0,
+                object.cropY ?? 0,
+                object.cropWidth,
+                object.cropHeight,
+                drawX,
+                drawY,
+                EDITOR_TILE_SIZE,
+                EDITOR_TILE_SIZE
+              );
+            } else {
+              context.drawImage(image, drawX, drawY, EDITOR_TILE_SIZE, EDITOR_TILE_SIZE);
+            }
+          } else {
+            context.fillStyle = object.solid ? "rgba(240, 106, 106, 0.8)" : "rgba(98, 199, 255, 0.8)";
+            context.fillRect(drawX, drawY, EDITOR_TILE_SIZE, EDITOR_TILE_SIZE);
+          }
+        }
+      }
+    }
+
+    context.strokeStyle = "rgba(183, 210, 238, 0.22)";
+    context.lineWidth = 1;
+    for (let x = 0; x <= draft.mapSize; x += 1) {
+      context.beginPath();
+      context.moveTo(x * EDITOR_TILE_SIZE, 0);
+      context.lineTo(x * EDITOR_TILE_SIZE, canvas.height);
+      context.stroke();
+    }
+    for (let y = 0; y <= draft.mapSize; y += 1) {
+      context.beginPath();
+      context.moveTo(0, y * EDITOR_TILE_SIZE);
+      context.lineTo(canvas.width, y * EDITOR_TILE_SIZE);
+      context.stroke();
+    }
+  }, [draft]);
+
+  function addLayer(): void {
+    const id = criarId("layer");
+    setDraft((current) => ({
+      ...current,
+      layers: [...current.layers, criarLayerVazia(current.mapSize, id, `Layer ${current.layers.length + 1}`)]
+    }));
+    setActiveLayerId(id);
+  }
+
+  function removeLayer(layerId: string): void {
+    setDraft((current) => {
+      if (current.layers.length <= 1) {
+        return current;
+      }
+      const nextLayers = current.layers.filter((entry) => entry.id !== layerId);
+      return {
+        ...current,
+        layers: nextLayers
+      };
+    });
+  }
+
+  function moveLayer(layerId: string, direction: "up" | "down"): void {
+    setDraft((current) => {
+      const index = current.layers.findIndex((entry) => entry.id === layerId);
+      if (index < 0) {
+        return current;
+      }
+      const targetIndex = direction === "up" ? index - 1 : index + 1;
+      if (targetIndex < 0 || targetIndex >= current.layers.length) {
+        return current;
+      }
+      const nextLayers = [...current.layers];
+      const [item] = nextLayers.splice(index, 1);
+      nextLayers.splice(targetIndex, 0, item);
+      return {
+        ...current,
+        layers: nextLayers
+      };
+    });
+  }
+
+  function addObject(): void {
+    if (!newObjectImageDataUrl.trim()) {
+      setStatus("Selecione uma imagem para o objeto.");
+      return;
+    }
+
+    const object: MapObjectDefinition = {
+      id: criarId("obj"),
+      name: newObjectName.trim() || `Objeto ${draft.objects.length + 1}`,
+      imageDataUrl: newObjectImageDataUrl,
+      maskWidth: Math.max(1, Math.min(8, Math.round(newObjectMaskWidth))),
+      maskHeight: Math.max(1, Math.min(8, Math.round(newObjectMaskHeight))),
+      solid: newObjectSolid,
+      cropX: null,
+      cropY: null,
+      cropWidth: null,
+      cropHeight: null
+    };
+
+    setDraft((current) => ({
+      ...current,
+      objects: [...current.objects, object]
+    }));
+    setActiveObjectId(object.id);
+    setStatus(`Objeto "${object.name}" adicionado.`);
+  }
+
+  async function onSelectObjectImage(event: ChangeEvent<HTMLInputElement>): Promise<void> {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+    try {
+      const dataUrl = await lerArquivoImagem(file);
+      setNewObjectImageDataUrl(dataUrl);
+      setStatus(`Imagem carregada: ${file.name}`);
+    } catch (error) {
+      console.error(error);
+      setStatus("Falha ao carregar imagem.");
+    }
+  }
+
+  async function onReplaceActiveObjectImage(event: ChangeEvent<HTMLInputElement>): Promise<void> {
+    const file = event.target.files?.[0];
+    if (!file || !activeObject) {
+      return;
+    }
+    try {
+      const dataUrl = await lerArquivoImagem(file);
+      updateActiveObject((object) => {
+        object.imageDataUrl = dataUrl;
+      });
+      setStatus(`Imagem do objeto "${activeObject.name}" atualizada.`);
+    } catch (error) {
+      console.error(error);
+      setStatus("Falha ao trocar imagem do objeto.");
+    }
+  }
+
+  function limparObjetoDoMapa(objectId: string): void {
+    setDraft((current) => {
+      const next = cloneMap(current);
+      for (const layer of next.layers) {
+        for (let y = 0; y < next.mapSize; y += 1) {
+          for (let x = 0; x < next.mapSize; x += 1) {
+            if (layer.tiles[y][x] === objectId) {
+              layer.tiles[y][x] = null;
+            }
+          }
+        }
+      }
+      return next;
+    });
+  }
+
+  function limparObjetoSelecionadoDoMapa(): void {
+    if (!activeObject) {
+      return;
+    }
+    limparObjetoDoMapa(activeObject.id);
+    setStatus(`Objeto "${activeObject.name}" limpo do cenario.`);
+  }
+
+  function removerObjetoSelecionado(): void {
+    if (!activeObject) {
+      return;
+    }
+    const removedId = activeObject.id;
+    const removedName = activeObject.name;
+
+    setDraft((current) => {
+      const next = cloneMap(current);
+      for (const layer of next.layers) {
+        for (let y = 0; y < next.mapSize; y += 1) {
+          for (let x = 0; x < next.mapSize; x += 1) {
+            if (layer.tiles[y][x] === removedId) {
+              layer.tiles[y][x] = null;
+            }
+          }
+        }
+      }
+      next.objects = next.objects.filter((entry) => entry.id !== removedId);
+      return next;
+    });
+
+    imageCacheRef.current.delete(removedId);
+    setStatus(`Objeto "${removedName}" removido.`);
+    setActiveObjectId((currentId) => (currentId === removedId ? "" : currentId));
+  }
+
+  async function saveMap(): Promise<void> {
+    setSaving(true);
+    setStatus("Salvando mapa...");
+    try {
+      await onSave({
+        mapKey: draft.mapKey.trim() || "default",
+        name: draft.name.trim() || "Mapa Principal",
+        mapSize: draft.mapSize,
+        objects: draft.objects,
+        layers: draft.layers
+      });
+      setStatus("Mapa salvo no banco com sucesso.");
+    } catch (error) {
+      console.error(error);
+      setStatus(error instanceof Error ? error.message : "Falha ao salvar mapa.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <section className="map-editor">
+      <header className="map-editor-head">
+        <div>
+          <h3>Editor de Mapa</h3>
+          <p>Use clique esquerdo para pintar e clique direito para apagar 1 slot da grid.</p>
+        </div>
+        <div className="map-editor-actions">
+          <button type="button" className="btn-ghost" onClick={onClose}>
+            Fechar (/edit)
+          </button>
+          <button type="button" className="btn-primary" onClick={saveMap} disabled={saving}>
+            {saving ? "Salvando..." : "Salvar no banco"}
+          </button>
+        </div>
+      </header>
+
+      <div className="map-editor-meta">
+        <label>
+          Map key
+          <input value={draft.mapKey} onChange={(event) => setDraft((current) => ({ ...current, mapKey: event.target.value }))} />
+        </label>
+        <label>
+          Nome do mapa
+          <input value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} />
+        </label>
+      </div>
+
+      <div className="map-editor-grid">
+        <aside className="map-editor-sidebar">
+          <section className="map-editor-block">
+            <div className="map-editor-block-head">
+              <h4>Layers</h4>
+              <button type="button" className="btn-ghost" onClick={addLayer}>
+                + Layer
+              </button>
+            </div>
+            <div className="map-editor-list">
+              {draft.layers.map((layer, index) => (
+                <article key={layer.id} className={`map-editor-layer ${layer.id === activeLayerId ? "active" : ""}`}>
+                  <input
+                    value={layer.name}
+                    onChange={(event) =>
+                      setDraft((current) => {
+                        const next = cloneMap(current);
+                        next.layers[index].name = event.target.value;
+                        return next;
+                      })
+                    }
+                  />
+                  <label className="inline-check">
+                    <input
+                      type="checkbox"
+                      checked={layer.visible}
+                      onChange={(event) =>
+                        setDraft((current) => {
+                          const next = cloneMap(current);
+                          next.layers[index].visible = event.target.checked;
+                          return next;
+                        })
+                      }
+                    />
+                    visivel
+                  </label>
+                  <div className="map-editor-layer-actions">
+                    <button type="button" className="btn-ghost" onClick={() => setActiveLayerId(layer.id)}>
+                      editar
+                    </button>
+                    <button type="button" className="btn-ghost" onClick={() => moveLayer(layer.id, "up")}>
+                      ↑
+                    </button>
+                    <button type="button" className="btn-ghost" onClick={() => moveLayer(layer.id, "down")}>
+                      ↓
+                    </button>
+                    <button type="button" className="btn-ghost" onClick={() => removeLayer(layer.id)}>
+                      x
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
+
+          <section className="map-editor-block">
+            <h4>Novo objeto</h4>
+            <label>
+              Nome
+              <input value={newObjectName} onChange={(event) => setNewObjectName(event.target.value)} />
+            </label>
+            <label>
+              Mascara Largura (tiles)
+              <input
+                type="number"
+                min={1}
+                max={8}
+                value={newObjectMaskWidth}
+                onChange={(event) => setNewObjectMaskWidth(Number(event.target.value))}
+              />
+            </label>
+            <label>
+              Mascara Altura (tiles)
+              <input
+                type="number"
+                min={1}
+                max={8}
+                value={newObjectMaskHeight}
+                onChange={(event) => setNewObjectMaskHeight(Number(event.target.value))}
+              />
+            </label>
+            <label className="inline-check">
+              <input
+                type="checkbox"
+                checked={newObjectSolid}
+                onChange={(event) => setNewObjectSolid(event.target.checked)}
+              />
+              objeto solido (bloqueia player)
+            </label>
+            <label>
+              Imagem
+              <input type="file" accept="image/*" onChange={(event) => void onSelectObjectImage(event)} />
+            </label>
+            <button type="button" className="btn-primary" onClick={addObject}>
+              Adicionar objeto
+            </button>
+          </section>
+
+          <section className="map-editor-block">
+            <h4>Brushes</h4>
+            <p className="empty-text">Duplo clique no brush para abrir o editor de recorte.</p>
+            <div className="map-editor-objects">
+              {draft.objects.map((object) => (
+                <button
+                  type="button"
+                  key={object.id}
+                  className={`map-editor-object ${object.id === activeObjectId ? "active" : ""}`}
+                  onClick={() => setActiveObjectId(object.id)}
+                  onDoubleClick={() => abrirEditorRecorte(object.id)}
+                  title="Duplo clique para recortar imagem"
+                >
+                  <img src={object.imageDataUrl} alt={object.name} />
+                  <strong>{object.name}</strong>
+                  <small>
+                    {object.maskWidth}x{object.maskHeight} {object.solid ? "solido" : "decor"}
+                  </small>
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              className="btn-ghost"
+              onClick={preencherLayerAtivaComObjetoSelecionado}
+              disabled={!activeObject || activeLayerIndex < 0}
+            >
+              Preencher layer ativa
+            </button>
+          </section>
+
+          <section className="map-editor-block">
+            <h4>Editar objeto selecionado</h4>
+            {!activeObject ? <p className="empty-text">Selecione um brush para editar.</p> : null}
+            {activeObject ? (
+              <>
+                <label>
+                  Nome
+                  <input
+                    value={activeObject.name}
+                    onChange={(event) =>
+                      updateActiveObject((object) => {
+                        object.name = event.target.value;
+                      })
+                    }
+                  />
+                </label>
+                <label>
+                  Mascara Largura
+                  <input
+                    type="number"
+                    min={1}
+                    max={8}
+                    value={activeObject.maskWidth}
+                    onChange={(event) =>
+                      updateActiveObject((object) => {
+                        object.maskWidth = Math.max(1, Math.min(8, Math.round(Number(event.target.value) || 1)));
+                      })
+                    }
+                  />
+                </label>
+                <label>
+                  Mascara Altura
+                  <input
+                    type="number"
+                    min={1}
+                    max={8}
+                    value={activeObject.maskHeight}
+                    onChange={(event) =>
+                      updateActiveObject((object) => {
+                        object.maskHeight = Math.max(1, Math.min(8, Math.round(Number(event.target.value) || 1)));
+                      })
+                    }
+                  />
+                </label>
+                <label className="inline-check">
+                  <input
+                    type="checkbox"
+                    checked={activeObject.solid}
+                    onChange={(event) =>
+                      updateActiveObject((object) => {
+                        object.solid = event.target.checked;
+                      })
+                    }
+                  />
+                  objeto solido
+                </label>
+                <label>
+                  Trocar imagem
+                  <input type="file" accept="image/*" onChange={(event) => void onReplaceActiveObjectImage(event)} />
+                </label>
+
+                <div className="map-editor-layer-actions">
+                  <button type="button" className="btn-ghost" onClick={limparObjetoSelecionadoDoMapa}>
+                    Limpar do mapa
+                  </button>
+                  <button type="button" className="btn-ghost" onClick={removerObjetoSelecionado}>
+                    Remover objeto
+                  </button>
+                </div>
+
+                <p className="empty-text">Recorte (tileset): deixe vazio para usar imagem inteira.</p>
+
+                <button type="button" className="btn-ghost" onClick={() => abrirEditorRecorte(activeObject.id)}>
+                  Abrir editor de recorte
+                </button>
+
+                <div className="map-editor-crop-grid">
+                  <label>
+                    Crop X
+                    <input
+                      type="number"
+                      value={activeObject.cropX ?? ""}
+                      onChange={(event) =>
+                        updateActiveObject((object) => {
+                          object.cropX = parseNullableInt(event.target.value, 0, 20_000);
+                        })
+                      }
+                    />
+                  </label>
+                  <label>
+                    Crop Y
+                    <input
+                      type="number"
+                      value={activeObject.cropY ?? ""}
+                      onChange={(event) =>
+                        updateActiveObject((object) => {
+                          object.cropY = parseNullableInt(event.target.value, 0, 20_000);
+                        })
+                      }
+                    />
+                  </label>
+                  <label>
+                    Crop Width
+                    <input
+                      type="number"
+                      value={activeObject.cropWidth ?? ""}
+                      onChange={(event) =>
+                        updateActiveObject((object) => {
+                          object.cropWidth = parseNullableInt(event.target.value, 1, 20_000);
+                        })
+                      }
+                    />
+                  </label>
+                  <label>
+                    Crop Height
+                    <input
+                      type="number"
+                      value={activeObject.cropHeight ?? ""}
+                      onChange={(event) =>
+                        updateActiveObject((object) => {
+                          object.cropHeight = parseNullableInt(event.target.value, 1, 20_000);
+                        })
+                      }
+                    />
+                  </label>
+                </div>
+              </>
+            ) : null}
+          </section>
+        </aside>
+
+        <div className="map-editor-canvas-shell">
+          <canvas
+            ref={canvasRef}
+            className="map-editor-canvas"
+            onMouseDown={handleMouseDown}
+            onMouseMove={handleMouseMove}
+            onMouseUp={handleMouseUp}
+            onContextMenu={(event) => event.preventDefault()}
+          />
+        </div>
+      </div>
+
+      <footer className="map-editor-footer">
+        <span>
+          Layer ativo: <strong>{activeLayerIndex >= 0 ? draft.layers[activeLayerIndex].name : "-"}</strong>
+        </span>
+        <span>
+          Brush: <strong>{activeObject?.name ?? "nenhum"}</strong>
+        </span>
+        <span>{status}</span>
+      </footer>
+
+      {cropEditorObject ? (
+        <div
+          className="map-editor-crop-modal-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              fecharEditorRecorte();
+            }
+          }}
+        >
+          <section className="map-editor-crop-modal" role="dialog" aria-modal="true">
+            <header>
+              <h4>Recorte de imagem: {cropEditorObject.name}</h4>
+              <p>Arraste o mouse na imagem para definir a mascara do objeto.</p>
+            </header>
+
+            <canvas
+              ref={cropCanvasRef}
+              className="map-editor-crop-canvas"
+              onMouseDown={handleCropMouseDown}
+              onMouseMove={handleCropMouseMove}
+              onMouseUp={handleCropMouseUp}
+              onMouseLeave={handleCropMouseUp}
+            />
+
+            <div className="map-editor-crop-tools">
+              <label className="inline-check">
+                <input
+                  type="checkbox"
+                  checked={cropGridEnabled}
+                  onChange={(event) => setCropGridEnabled(event.target.checked)}
+                />
+                dividir em grid
+              </label>
+              <label>
+                tamanho da celula (px)
+                <input
+                  type="number"
+                  min={1}
+                  value={cropGridCellSize}
+                  onChange={(event) => setCropGridCellSize(Math.max(1, Math.round(Number(event.target.value) || 1)))}
+                />
+              </label>
+            </div>
+
+            <p className="empty-text">
+              Selecao atual:{" "}
+              {(() => {
+                const image = cropImageRef.current;
+                if (!image) {
+                  return "-";
+                }
+                const selected = obterRecorteAtual(image);
+                return `${selected.x}, ${selected.y} | ${selected.width}x${selected.height}`;
+              })()}
+            </p>
+
+            <div className="map-editor-crop-new-object">
+              <h5>Salvar como novo objeto</h5>
+              <label>
+                Nome do novo objeto *
+                <input value={cropNewObjectName} onChange={(event) => setCropNewObjectName(event.target.value)} />
+              </label>
+              <div className="map-editor-crop-new-object-grid">
+                <label>
+                  Mascara Largura
+                  <input
+                    type="number"
+                    min={1}
+                    max={8}
+                    value={cropNewObjectMaskWidth}
+                    onChange={(event) => setCropNewObjectMaskWidth(Math.max(1, Math.round(Number(event.target.value) || 1)))}
+                  />
+                </label>
+                <label>
+                  Mascara Altura
+                  <input
+                    type="number"
+                    min={1}
+                    max={8}
+                    value={cropNewObjectMaskHeight}
+                    onChange={(event) => setCropNewObjectMaskHeight(Math.max(1, Math.round(Number(event.target.value) || 1)))}
+                  />
+                </label>
+              </div>
+              <label className="inline-check">
+                <input
+                  type="checkbox"
+                  checked={cropNewObjectSolid}
+                  onChange={(event) => setCropNewObjectSolid(event.target.checked)}
+                />
+                objeto solido (colisao)
+              </label>
+            </div>
+
+            <div className="map-editor-crop-modal-actions">
+              <button type="button" className="btn-ghost" onClick={selecionarImagemInteiraNoRecorte}>
+                Imagem inteira
+              </button>
+              <button type="button" className="btn-ghost" onClick={fecharEditorRecorte}>
+                Cancelar
+              </button>
+              <button type="button" className="btn-primary" onClick={salvarRecorteNoObjetoAtual}>
+                Salvar neste objeto
+              </button>
+              <button type="button" className="btn-primary" onClick={salvarRecorteComoNovoObjeto}>
+                Salvar como novo objeto
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+    </section>
+  );
+}

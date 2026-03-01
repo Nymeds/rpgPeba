@@ -8,6 +8,7 @@ import {
   type PublicPlayer
 } from "../game.js";
 import type { Direction } from "./types.js";
+import { tileSolido } from "./mapEditor.js";
 
 const ATTACK_DAMAGE = 20;
 const MONK_HEAL_AMOUNT = 16;
@@ -172,6 +173,14 @@ function normalizeVector(x: number, y: number): { x: number; y: number; length: 
   };
 }
 
+function tileIndex(value: number): number {
+  return Math.round(limitarAoMapa(value));
+}
+
+function posicaoSolida(x: number, y: number): boolean {
+  return tileSolido(tileIndex(x), tileIndex(y));
+}
+
 function cleanupExpiredAttacks(nowMs: number): void {
   for (const [attackId, attack] of activeAttacksById.entries()) {
     if (attack.expiresAt <= nowMs) {
@@ -323,8 +332,25 @@ export function applyMovement(deltaSeconds: number, velocityTilesPerSecond: numb
 
     const fromX = player.x;
     const fromY = player.y;
-    const toX = limitarAoMapa(fromX + normalized.x * travel);
-    const toY = limitarAoMapa(fromY + normalized.y * travel);
+    const targetX = limitarAoMapa(fromX + normalized.x * travel);
+    const targetY = limitarAoMapa(fromY + normalized.y * travel);
+    let toX = targetX;
+    let toY = targetY;
+
+    // Resolve colisao por tile com tentativa de "slide" nos eixos.
+    //  Se bater em parede, tenta escorregar para o lado sem atravessar bloco solido.
+    if (posicaoSolida(targetX, targetY)) {
+      const canSlideX = !posicaoSolida(targetX, fromY);
+      const canSlideY = !posicaoSolida(fromX, targetY);
+
+      if (canSlideX) {
+        toY = fromY;
+      } else if (canSlideY) {
+        toX = fromX;
+      } else {
+        continue;
+      }
+    }
 
     if (Math.abs(toX - fromX) < 0.0001 && Math.abs(toY - fromY) < 0.0001) {
       continue;

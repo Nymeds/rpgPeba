@@ -60,6 +60,7 @@ export type PublicAttack = {
 export type WorldUpdatePayload = {
   mapSize: number;
   tick: number;
+  mapRevision: number;
   players: PublicPlayer[];
   attacks: PublicAttack[];
 };
@@ -84,6 +85,35 @@ export type ChatHistoryPayload = {
 
 export type ChatSendPayload = {
   text: string;
+};
+
+export type MapObjectDefinition = {
+  id: string;
+  name: string;
+  imageDataUrl: string;
+  maskWidth: number;
+  maskHeight: number;
+  solid: boolean;
+  cropX: number | null;
+  cropY: number | null;
+  cropWidth: number | null;
+  cropHeight: number | null;
+};
+
+export type MapLayerDefinition = {
+  id: string;
+  name: string;
+  visible: boolean;
+  tiles: Array<Array<string | null>>;
+};
+
+export type GameMapDefinition = {
+  mapKey: string;
+  name: string;
+  mapSize: number;
+  objects: MapObjectDefinition[];
+  layers: MapLayerDefinition[];
+  updatedAt: string;
 };
 
 export type SocketAck = (response: { ok: boolean; error?: string }) => void;

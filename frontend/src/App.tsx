@@ -1,11 +1,19 @@
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
-import { autenticarConta, carregarSessao, criarPersonagem, registrarConta } from "./api";
+import { autenticarConta, carregarMapa, carregarSessao, criarPersonagem, registrarConta, salvarMapa } from "./api";
+import MapEditor from "./game/MapEditor";
 import GameCanvas from "./game/GameCanvas";
 import { useGameSocket } from "./game/useGameSocket";
 import monkIdleGif from "../images/Monk/idle.gif";
 import warriorIdleGif from "../images/Warrior/idle.gif";
-import { PlayerType, type Account, type AuthResponse, type Character, type PublicPlayer } from "./types";
+import {
+  PlayerType,
+  type Account,
+  type AuthResponse,
+  type Character,
+  type GameMapDefinition,
+  type PublicPlayer
+} from "./types";
 
 type AuthMode = "login" | "register";
 
@@ -72,12 +80,17 @@ export default function App() {
   const [selectedPlayerType, setSelectedPlayerType] = useState<PlayerType>(PlayerType.WARRIOR);
   const [characterName, setCharacterName] = useState("");
   const [chatInput, setChatInput] = useState("");
+  const [worldMap, setWorldMap] = useState<GameMapDefinition | null>(null);
+  const [mapEditorOpen, setMapEditorOpen] = useState(false);
+  const [mapBusy, setMapBusy] = useState(false);
+  const [showGrid, setShowGrid] = useState(false);
 
   const [busy, setBusy] = useState(false);
   const [chatBusy, setChatBusy] = useState(false);
   const [notice, setNotice] = useState("Pronto para conectar.");
 
   const chatLogRef = useRef<HTMLDivElement | null>(null);
+  const lastLoadedMapRevisionRef = useRef<number | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -128,9 +141,82 @@ export default function App() {
     };
   }, [token]);
 
+  useEffect(() => {
+    let active = true;
+
+    async function loadMapFromApi() {
+      if (!token) {
+        if (!active) {
+          return;
+        }
+        setWorldMap(null);
+        setMapEditorOpen(false);
+        return;
+      }
+
+      try {
+        const response = await carregarMapa(token);
+        if (!active) {
+          return;
+        }
+        setWorldMap(response.map);
+      } catch (error) {
+        if (!active) {
+          return;
+        }
+        console.error(error);
+        setNotice(error instanceof Error ? error.message : "Falha ao carregar mapa.");
+      }
+    }
+
+    void loadMapFromApi();
+    return () => {
+      active = false;
+    };
+  }, [token]);
+
   const socketEnabled = Boolean(token && character);
   const gameSocket = useGameSocket(token, socketEnabled);
   const selfPlayerId = gameSocket.session?.playerId ?? character?.id ?? null;
+  const worldMapRevision = gameSocket.world?.mapRevision ?? null;
+
+  useEffect(() => {
+    lastLoadedMapRevisionRef.current = null;
+  }, [token]);
+
+  useEffect(() => {
+    let active = true;
+
+    async function syncMapByRevision() {
+      if (!token || worldMapRevision === null) {
+        return;
+      }
+
+      if (lastLoadedMapRevisionRef.current === worldMapRevision) {
+        return;
+      }
+
+      lastLoadedMapRevisionRef.current = worldMapRevision;
+      try {
+        const response = await carregarMapa(token);
+        if (!active) {
+          return;
+        }
+        setWorldMap(response.map);
+      } catch (error) {
+        console.error(error);
+        if (!active) {
+          return;
+        }
+        setNotice(error instanceof Error ? error.message : "Falha ao sincronizar mapa atualizado.");
+      }
+    }
+
+    void syncMapByRevision();
+    return () => {
+      active = false;
+    };
+  }, [token, worldMapRevision]);
 
   useEffect(() => {
     const node = chatLogRef.current;
@@ -238,12 +324,61 @@ export default function App() {
 
   async function onSubmitChat(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
-    if (!socketEnabled || chatBusy) {
+    const messageText = chatInput.trim();
+    if (!messageText) {
       return;
     }
 
-    const messageText = chatInput.trim();
-    if (!messageText) {
+    if (messageText.toLowerCase() === "/edit") {
+      setChatInput("");
+
+      if (!token) {
+        setNotice("Faca login para usar o editor.");
+        return;
+      }
+
+      if (!worldMap) {
+        setNotice("Carregando dados do mapa...");
+        try {
+          const mapResponse = await carregarMapa(token);
+          setWorldMap(mapResponse.map);
+        } catch (error) {
+          console.error(error);
+          setNotice(error instanceof Error ? error.message : "Falha ao abrir editor.");
+          return;
+        }
+      }
+
+      setMapEditorOpen((current) => {
+        const next = !current;
+        setNotice(next ? "Editor de mapa aberto (/edit para fechar)." : "Editor de mapa fechado.");
+        return next;
+      });
+      return;
+    }
+
+    // Comando local de visualizacao:
+    // /showgrid true -> mostra linhas
+    // /showgrid false -> esconde linhas
+    const [command, rawValue = ""] = messageText.trim().split(/\s+/, 2);
+    if (command.toLowerCase() === "/showgrid") {
+      setChatInput("");
+      const normalizedValue = rawValue.toLowerCase();
+      if (normalizedValue === "true") {
+        setShowGrid(true);
+        setNotice("Grid visual do mapa ativada.");
+        return;
+      }
+      if (normalizedValue === "false") {
+        setShowGrid(false);
+        setNotice("Grid visual do mapa desativada.");
+        return;
+      }
+      setNotice("Uso: /showgrid true ou /showgrid false");
+      return;
+    }
+
+    if (!socketEnabled || chatBusy) {
       return;
     }
 
@@ -271,7 +406,24 @@ export default function App() {
     setSelectedPlayerType(PlayerType.WARRIOR);
     setCharacterName("");
     setChatInput("");
+    setWorldMap(null);
+    setMapEditorOpen(false);
     setNotice("Logout feito.");
+  }
+
+  async function salvarMapaEditado(nextMap: Omit<GameMapDefinition, "updatedAt">): Promise<void> {
+    if (!token) {
+      throw new Error("Token ausente para salvar mapa.");
+    }
+
+    setMapBusy(true);
+    try {
+      const response = await salvarMapa(token, nextMap);
+      setWorldMap(response.map);
+      setNotice(`Mapa "${response.map.name}" salvo no banco.`);
+    } finally {
+      setMapBusy(false);
+    }
   }
 
   return (
@@ -387,6 +539,7 @@ export default function App() {
       ) : null}
 
       {!sessionBooting && token && character ? (
+        <>
         <main className="arena-layout">
           <aside className="panel players-panel">
             <div className="panel-head">
@@ -419,9 +572,11 @@ export default function App() {
             <section className="game-stage">
               <GameCanvas
                 world={gameSocket.world}
+                mapDefinition={worldMap}
                 selfPlayerId={selfPlayerId}
                 onMove={gameSocket.sendMove}
                 onAttack={gameSocket.sendAttack}
+                showGrid={showGrid}
               />
             </section>
 
@@ -516,6 +671,12 @@ export default function App() {
               <p>
                 <strong>Habilidade:</strong> Warrior causa dano, Monk cura outros players.
               </p>
+              <p>
+                <strong>Editor:</strong> digite <code>/edit</code> no chat para abrir/fechar.
+              </p>
+              <p>
+                <strong>Grid:</strong> <code>/showgrid true</code> ou <code>/showgrid false</code>.
+              </p>
 
               <button type="button" className="btn-ghost" onClick={logout}>
                 Logout
@@ -524,6 +685,20 @@ export default function App() {
             </section>
           </aside>
         </main>
+        {mapEditorOpen && worldMap ? (
+          <section className="panel map-editor-panel-wrap">
+            {mapBusy ? <p className="empty-text">Sincronizando mapa com o banco...</p> : null}
+            <MapEditor
+              map={worldMap}
+              onSave={salvarMapaEditado}
+              onClose={() => {
+                setMapEditorOpen(false);
+                setNotice("Editor de mapa fechado.");
+              }}
+            />
+          </section>
+        ) : null}
+        </>
       ) : null}
     </div>
   );

@@ -11,7 +11,7 @@ import warriorHurtGif from "../../images/Warrior/hurt.gif";
 import warriorIdleGif from "../../images/Warrior/idle.gif";
 import warriorRunGif from "../../images/Warrior/run.gif";
 import { setupInput } from "./input";
-import { PlayerType, type MoveInput, type WorldUpdatePayload } from "../types";
+import { PlayerType, type GameMapDefinition, type MoveInput, type WorldUpdatePayload } from "../types";
 
 const TILE_SIZE = 80;
 const PLAYER_INTERPOLATION_RATE = 16;
@@ -20,7 +20,8 @@ const AIM_VECTOR_SENSITIVITY = 0.025;
 const ATTACK_RANGE_TILES = 1;
 const ATTACK_AIM_GAP_PX = 18;
 const WARRIOR_ATTACK_VISUAL_MS = 400;
-const MONK_HEAL_VISUAL_MS = 700;
+const MONK_HEAL_VISUAL_MS = 1100;
+const MAP_TILE_OVERDRAW_PX = 1;
 
 type CameraState = {
   x: number;
@@ -76,9 +77,11 @@ type AttackAimInput = {
 
 type GameCanvasProps = {
   world: WorldUpdatePayload | null;
+  mapDefinition?: GameMapDefinition | null;
   selfPlayerId: number | null;
   onMove: (input: MoveInput) => void;
   onAttack?: (input: AttackAimInput) => void;
+  showGrid?: boolean;
 };
 
 function clamp(value: number, min: number, max: number): number {
@@ -142,17 +145,20 @@ function escolherSpriteGif(
   return sprite.playerType === PlayerType.MONK ? monkIdleGif : warriorIdleGif;
 }
 
-export default function GameCanvas({ world, selfPlayerId, onMove, onAttack }: GameCanvasProps) {
+export default function GameCanvas({ world, mapDefinition, selfPlayerId, onMove, onAttack, showGrid = false }: GameCanvasProps) {
   const mapShellRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const cameraRef = useRef<CameraState>({ x: 0, y: 0, initialized: false });
   const renderedPlayersRef = useRef<Map<number, RenderPlayer>>(new Map());
   const lastFrameAtRef = useRef<number | null>(null);
   const worldRef = useRef(world);
+  const mapDefinitionRef = useRef(mapDefinition ?? null);
   const selfPlayerIdRef = useRef(selfPlayerId);
   const onAttackRef = useRef(onAttack);
   const onMoveRef = useRef(onMove);
+  const showGridRef = useRef(showGrid);
   const aimVectorRef = useRef<{ x: number; y: number }>({ x: 1, y: 0 });
+  const mapImageCacheRef = useRef<Map<string, HTMLImageElement>>(new Map());
   const attackAnimationByOwnerRef = useRef<
     Map<number, { attackId: number; kind: "damage" | "heal"; phaseTwo: boolean; endsAtMs: number }>
   >(new Map());
@@ -165,9 +171,11 @@ export default function GameCanvas({ world, selfPlayerId, onMove, onAttack }: Ga
 
   // Sempre manter refs atualizadas sem re-registrar listeners
   worldRef.current = world;
+  mapDefinitionRef.current = mapDefinition ?? null;
   selfPlayerIdRef.current = selfPlayerId;
   onAttackRef.current = onAttack;
   onMoveRef.current = onMove;
+  showGridRef.current = showGrid;
 
   const hasWorld = useMemo(() => Boolean(world && world.players.length > 0), [world]);
 
@@ -317,6 +325,7 @@ export default function GameCanvas({ world, selfPlayerId, onMove, onAttack }: Ga
         previousFrameAt === null ? 1 / 60 : Math.min((nowMs - previousFrameAt) / 1000, 0.1);
 
       const currentWorld = worldRef.current;
+      const currentMapDefinition = mapDefinitionRef.current;
       const currentSelfId = selfPlayerIdRef.current;
       const viewportWidth = canvas.clientWidth;
       const viewportHeight = canvas.clientHeight;
@@ -441,21 +450,84 @@ export default function GameCanvas({ world, selfPlayerId, onMove, onAttack }: Ga
       context.fillStyle = gradient;
       context.fillRect(renderOffsetX, renderOffsetY, mapPixelSize, mapPixelSize);
 
-      context.strokeStyle = "rgba(186, 213, 228, 0.2)";
-      context.lineWidth = 1;
-      for (let x = 0; x <= currentWorld.mapSize; x += 1) {
-        const sx = renderOffsetX + x * TILE_SIZE;
-        context.beginPath();
-        context.moveTo(sx, renderOffsetY);
-        context.lineTo(sx, renderOffsetY + mapPixelSize);
-        context.stroke();
+      if (currentMapDefinition && currentMapDefinition.mapSize === currentWorld.mapSize) {
+        const previousImageSmoothing = context.imageSmoothingEnabled;
+        context.imageSmoothingEnabled = false;
+        const objectsById = new Map(currentMapDefinition.objects.map((entry) => [entry.id, entry]));
+        for (const layer of currentMapDefinition.layers) {
+          if (!layer.visible) {
+            continue;
+          }
+
+          for (let y = 0; y < currentMapDefinition.mapSize; y += 1) {
+            for (let x = 0; x < currentMapDefinition.mapSize; x += 1) {
+              const objectId = layer.tiles[y]?.[x] ?? null;
+              if (!objectId) {
+                continue;
+              }
+              const object = objectsById.get(objectId);
+              if (!object) {
+                continue;
+              }
+
+              let image = mapImageCacheRef.current.get(object.id);
+              if (!image) {
+                image = new Image();
+                image.src = object.imageDataUrl;
+                mapImageCacheRef.current.set(object.id, image);
+              }
+              if (!image.complete) {
+                continue;
+              }
+
+              // Evita "fendas" visuais entre tiles adjacentes por interpolacao/subpixel.
+              const tileOverdraw = object.solid ? 0 : MAP_TILE_OVERDRAW_PX;
+              const drawX = renderOffsetX + x * TILE_SIZE;
+              const drawY = renderOffsetY + y * TILE_SIZE;
+              const drawSize = TILE_SIZE + tileOverdraw;
+              if (
+                object.cropWidth !== null &&
+                object.cropHeight !== null &&
+                object.cropWidth > 0 &&
+                object.cropHeight > 0
+              ) {
+                context.drawImage(
+                  image,
+                  object.cropX ?? 0,
+                  object.cropY ?? 0,
+                  object.cropWidth,
+                  object.cropHeight,
+                  drawX,
+                  drawY,
+                  drawSize,
+                  drawSize
+                );
+              } else {
+                context.drawImage(image, drawX, drawY, drawSize, drawSize);
+              }
+            }
+          }
+        }
+        context.imageSmoothingEnabled = previousImageSmoothing;
       }
-      for (let y = 0; y <= currentWorld.mapSize; y += 1) {
-        const sy = renderOffsetY + y * TILE_SIZE;
-        context.beginPath();
-        context.moveTo(renderOffsetX, sy);
-        context.lineTo(renderOffsetX + mapPixelSize, sy);
-        context.stroke();
+
+      if (showGridRef.current) {
+        context.strokeStyle = "rgba(186, 213, 228, 0.2)";
+        context.lineWidth = 1;
+        for (let x = 0; x <= currentWorld.mapSize; x += 1) {
+          const sx = renderOffsetX + x * TILE_SIZE;
+          context.beginPath();
+          context.moveTo(sx, renderOffsetY);
+          context.lineTo(sx, renderOffsetY + mapPixelSize);
+          context.stroke();
+        }
+        for (let y = 0; y <= currentWorld.mapSize; y += 1) {
+          const sy = renderOffsetY + y * TILE_SIZE;
+          context.beginPath();
+          context.moveTo(renderOffsetX, sy);
+          context.lineTo(renderOffsetX + mapPixelSize, sy);
+          context.stroke();
+        }
       }
 
       context.strokeStyle = "rgba(251, 210, 79, 0.65)";

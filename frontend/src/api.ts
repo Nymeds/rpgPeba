@@ -1,4 +1,4 @@
-import type { AuthResponse, Character, PlayerType } from "./types";
+import type { AuthResponse, Character, GameMapDefinition, PlayerType } from "./types";
 
 export const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:3000";
 export const WS_URL = import.meta.env.VITE_WS_URL ?? API_URL;
@@ -97,6 +97,28 @@ export function criarPersonagem(token: string, name: string): Promise<{ characte
     {
       method: "POST",
       body: JSON.stringify({ name })
+    },
+    token
+  );
+}
+
+export function carregarMapa(token: string, mapKey = "default"): Promise<{ map: GameMapDefinition }> {
+  const encodedMapKey = encodeURIComponent(mapKey);
+  return requisicaoJson<{ map: GameMapDefinition }>(
+    `/api/world/map?mapKey=${encodedMapKey}`,
+    {
+      method: "GET"
+    },
+    token
+  );
+}
+
+export function salvarMapa(token: string, map: Omit<GameMapDefinition, "updatedAt">): Promise<{ map: GameMapDefinition }> {
+  return requisicaoJson<{ map: GameMapDefinition }>(
+    "/api/world/map",
+    {
+      method: "PUT",
+      body: JSON.stringify(map)
     },
     token
   );

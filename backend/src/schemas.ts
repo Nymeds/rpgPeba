@@ -1,7 +1,7 @@
 // Tecnico: Zod valida payloads com regras declarativas.
 // Crianca: Fiscal que checa se os dados chegaram certinhos.
 import { z } from "zod";
-import { PlayerType } from "./game.js";
+import { MAP_SIZE, PlayerType } from "./game.js";
 
 // Tecnico: Resultado padrao das funcoes validate*.
 // Crianca: Diz se passou na prova e, se nao passou, mostra os erros.
@@ -74,6 +74,51 @@ const attackPayloadSchema = z.object({
   range: z.number().min(0.5, "range: minimo 0.5.").max(3, "range: maximo 3.").optional()
 });
 
+const mapObjectSchema = z.object({
+  id: z.string().trim().min(1, "objects.id: obrigatorio.").max(48, "objects.id: maximo 48 caracteres."),
+  name: z
+    .string()
+    .trim()
+    .min(1, "objects.name: obrigatorio.")
+    .max(40, "objects.name: maximo 40 caracteres."),
+  imageDataUrl: z
+    .string()
+    .trim()
+    .min(1, "objects.imageDataUrl: obrigatorio.")
+    .max(2_000_000, "objects.imageDataUrl: muito grande."),
+  maskWidth: z.number().int("objects.maskWidth: inteiro.").min(1, "objects.maskWidth: minimo 1.").max(8),
+  maskHeight: z.number().int("objects.maskHeight: inteiro.").min(1, "objects.maskHeight: minimo 1.").max(8),
+  solid: z.boolean(),
+  cropX: z.number().int("objects.cropX: inteiro.").min(0).max(20_000).nullable().optional(),
+  cropY: z.number().int("objects.cropY: inteiro.").min(0).max(20_000).nullable().optional(),
+  cropWidth: z.number().int("objects.cropWidth: inteiro.").min(1).max(20_000).nullable().optional(),
+  cropHeight: z.number().int("objects.cropHeight: inteiro.").min(1).max(20_000).nullable().optional()
+});
+
+const mapLayerSchema = z.object({
+  id: z.string().trim().min(1, "layers.id: obrigatorio.").max(48, "layers.id: maximo 48 caracteres."),
+  name: z.string().trim().min(1, "layers.name: obrigatorio.").max(40, "layers.name: maximo 40 caracteres."),
+  visible: z.boolean(),
+  tiles: z
+    .array(z.array(z.string().trim().min(1).max(48).nullable()))
+    .length(MAP_SIZE, `layers.tiles: precisa ter ${MAP_SIZE} linhas.`)
+    .refine(
+      (rows) => rows.every((row) => Array.isArray(row) && row.length === MAP_SIZE),
+      `layers.tiles: cada linha precisa ter ${MAP_SIZE} colunas.`
+    )
+});
+
+const saveMapBodySchema = z.object({
+  mapKey: z.string().trim().min(1).max(32).optional(),
+  name: z.string().trim().min(1, "name: obrigatorio.").max(40, "name: maximo 40 caracteres."),
+  mapSize: z
+    .number()
+    .int("mapSize: inteiro.")
+    .refine((value) => value === MAP_SIZE, `mapSize: neste prototipo deve ser ${MAP_SIZE}.`),
+  objects: z.array(mapObjectSchema).max(256, "objects: maximo 256 objetos."),
+  layers: z.array(mapLayerSchema).min(1, "layers: minimo 1 layer.").max(32, "layers: maximo 32 layers.")
+});
+
 // Tecnico: Tipos inferidos automaticamente do schema.
 // Crianca: TypeScript aprende o formato certo sozinho.
 export type AuthBody = z.infer<typeof authBodySchema>;
@@ -82,6 +127,15 @@ export type CreateCharacterBody = z.infer<typeof createCharacterBodySchema>;
 export type InventoryUpdateBody = z.infer<typeof inventoryUpdateBodySchema>;
 export type MovePayload = z.infer<typeof movePayloadSchema>;
 export type AttackPayload = z.infer<typeof attackPayloadSchema>;
+export type SaveMapObjectBody = z.infer<typeof mapObjectSchema>;
+export type SaveMapLayerBody = z.infer<typeof mapLayerSchema>;
+export type SaveMapBody = {
+  mapKey: string;
+  name: string;
+  mapSize: number;
+  objects: SaveMapObjectBody[];
+  layers: SaveMapLayerBody[];
+};
 
 function falharComZod(error: z.ZodError): ValidationResult<never> {
   // Tecnico: Converte ZodError para lista de mensagens simples.
@@ -142,4 +196,19 @@ export function validarPayloadMovimento(payload: unknown): ValidationResult<Move
 
 export function validarPayloadAtaque(payload: unknown): ValidationResult<AttackPayload> {
   return validarComSchema(attackPayloadSchema, payload);
+}
+
+export function validarCorpoSalvarMapa(body: unknown): ValidationResult<SaveMapBody> {
+  const parsed = validarComSchema(saveMapBodySchema, body);
+  if (!parsed.ok) {
+    return parsed;
+  }
+
+  return {
+    ok: true,
+    data: {
+      ...parsed.data,
+      mapKey: (parsed.data.mapKey ?? "default").trim().toLowerCase()
+    }
+  };
 }

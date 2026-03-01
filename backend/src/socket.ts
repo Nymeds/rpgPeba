@@ -279,6 +279,10 @@ export function registrarEventosSocket(app: FastifyInstance, io: SocketIOServer)
       pos: `(${session.x},${session.y})`
     });
 
+//ACIMA SERVIDOR SUBIU QUEM SUBIU N SOBE MAIS, AQUI EMBAIXO VEM O QUE FICA ESCUTANDO O QUE O CLIENTE MANDA PRA GENTE, COMO MOVIMENTO E ATAQUE, E A GENTE PROCESSA ISSO AQUI E MANDA PRO MUNDO REALTIME PRA ELE ATUALIZAR O ESTADO DO JOGO E MANDAR PRO CLIENTE DEPOIS
+
+
+    //escutar de movimento do cliente
     socket.on("player:move", (payload: unknown, confirmacao?: SocketAck) => {
       const parsedMove = validarPayloadMovimento(payload);
       if (!parsedMove.ok) {
@@ -313,7 +317,7 @@ export function registrarEventosSocket(app: FastifyInstance, io: SocketIOServer)
 
       responder(confirmacao, true);
     });
-
+    //escutar de ataque do cliente
     socket.on("atack", (payload: unknown, confirmacao?: SocketAck) => {
       const parsedAtack = validarPayloadAtaque(payload);
       if (!parsedAtack.ok) {

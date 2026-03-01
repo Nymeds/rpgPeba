@@ -29,3 +29,13 @@ model Character {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
+
+model GameMap {
+  id        Int      @id @default(autoincrement())
+  mapKey    String   @unique
+  name      String
+  mapSize   Int
+  data      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}

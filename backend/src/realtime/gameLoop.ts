@@ -3,6 +3,7 @@ import { Server as SocketIOServer } from "socket.io";
 import { MAP_SIZE } from "../game.js";
 import { logInfo } from "../logger.js";
 import { appendSystemChatMessage } from "./chat.js";
+import { consumirSinalMapaAtualizado, obterMapRevision } from "./mapEditor.js";
 import {
   applyAttackDamage,
   applyMovement,
@@ -20,6 +21,7 @@ const LOOP_SUMMARY_INTERVAL_TICKS = TICK_RATE;
 type WorldUpdatePayload = {
   mapSize: number;
   tick: number;
+  mapRevision: number;
   players: ReturnType<typeof buildPublicPlayersSnapshot>;
   attacks: ReturnType<typeof buildPublicAttacksSnapshot>;
 };
@@ -29,6 +31,7 @@ export function emitWorldUpdate(io: SocketIOServer, tick: number): void {
   const payload: WorldUpdatePayload = {
     mapSize: MAP_SIZE,
     tick,
+    mapRevision: obterMapRevision(), //visualizacao de mudancas no mapa
     players: buildPublicPlayersSnapshot(),
     attacks: buildPublicAttacksSnapshot(nowMs)
   };
@@ -115,6 +118,12 @@ export function startGameLoop(io: SocketIOServer): () => void {
         player: respawn.playerName,
         pos: `(${respawn.x},${respawn.y})`
       });
+    }
+
+    const houveAtualizacaoMapa = consumirSinalMapaAtualizado();
+    if (houveAtualizacaoMapa) {
+      logInfo("MAP", "Mapa atualizado e broadcast solicitado");
+      emitWorldUpdate(io, tick);
     }
 
     tick += 1;
