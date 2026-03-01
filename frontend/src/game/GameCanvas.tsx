@@ -105,32 +105,30 @@ export default function GameCanvas({ world, selfPlayerId, onMove, onAttack }: Ga
   const worldRef = useRef(world);
   const selfPlayerIdRef = useRef(selfPlayerId);
   const onAttackRef = useRef(onAttack);
+  const onMoveRef = useRef(onMove);
   const aimVectorRef = useRef<{ x: number; y: number }>({ x: 1, y: 0 });
 
   const [overlaySprites, setOverlaySprites] = useState<OverlaySprite[]>([]);
   const [aimLocked, setAimLocked] = useState(false);
   const [aimVector, setAimVector] = useState<{ x: number; y: number }>({ x: 1, y: 0 });
 
+  // Sempre manter refs atualizadas sem re-registrar listeners
   worldRef.current = world;
   selfPlayerIdRef.current = selfPlayerId;
   onAttackRef.current = onAttack;
+  onMoveRef.current = onMove;
 
   const hasWorld = useMemo(() => Boolean(world && world.players.length > 0), [world]);
+
   const selfPlayerOverlayInfo = useMemo(() => {
     if (!world || !selfPlayerId) {
       return null;
     }
-
     const player = world.players.find((entry) => entry.id === selfPlayerId);
     if (!player) {
       return null;
     }
-
-    return {
-      name: player.name,
-      x: player.x,
-      y: player.y
-    };
+    return { name: player.name, x: player.x, y: player.y };
   }, [selfPlayerId, world]);
 
   const selfSprite = useMemo(() => overlaySprites.find((sprite) => sprite.self) ?? null, [overlaySprites]);
@@ -139,12 +137,10 @@ export default function GameCanvas({ world, selfPlayerId, onMove, onAttack }: Ga
     if (!aimLocked || !selfSprite) {
       return null;
     }
-
     const centerX = selfSprite.left + selfSprite.size / 2;
     const centerY = selfSprite.top + selfSprite.size / 2;
     const radius = selfSprite.size * 0.84;
     const angle = angleDegFromVector(aimVector.x, aimVector.y);
-
     return {
       lineLeft: centerX,
       lineTop: centerY,
@@ -155,28 +151,30 @@ export default function GameCanvas({ world, selfPlayerId, onMove, onAttack }: Ga
     };
   }, [aimLocked, aimVector, selfSprite]);
 
+  // Estável para sempre — usa ref internamente
   const emitAimAttack = useCallback(() => {
     const sendAttack = onAttackRef.current;
     if (!sendAttack) {
       return;
     }
-
     const direction = normalizeDirection(aimVectorRef.current.x, aimVectorRef.current.y, { x: 1, y: 0 });
     aimVectorRef.current = direction;
     setAimVector(direction);
-
-    sendAttack({
-      dirX: direction.x,
-      dirY: direction.y,
-      range: ATTACK_RANGE_TILES
-    });
+    sendAttack({ dirX: direction.x, dirY: direction.y, range: ATTACK_RANGE_TILES });
   }, []);
 
-  useEffect(() => {
-    const cleanup = setupInput(onMove, emitAimAttack);
-    return cleanup;
-  }, [emitAimAttack, onMove]);
+  // Estável para sempre — usa ref internamente
+  const stableOnMove = useCallback((input: MoveInput) => {
+    onMoveRef.current(input);
+  }, []);
 
+  // Registra input UMA VEZ — dependências são estáveis
+  useEffect(() => {
+    const cleanup = setupInput(stableOnMove, emitAimAttack);
+    return cleanup;
+  }, [stableOnMove, emitAimAttack]);
+
+  // Pointer lock — registra UMA VEZ com refs
   useEffect(() => {
     const shell = mapShellRef.current;
     if (!shell) {
@@ -186,9 +184,8 @@ export default function GameCanvas({ world, selfPlayerId, onMove, onAttack }: Ga
     const handlePointerLockChange = () => {
       const locked = document.pointerLockElement === shell;
       setAimLocked(locked);
-
       if (!locked) {
-        onMove({ x: 0, y: 0 });
+        onMoveRef.current({ x: 0, y: 0 });
       }
     };
 
@@ -200,13 +197,11 @@ export default function GameCanvas({ world, selfPlayerId, onMove, onAttack }: Ga
       if (document.pointerLockElement !== shell) {
         return;
       }
-
       const next = normalizeDirection(
         aimVectorRef.current.x + event.movementX * AIM_VECTOR_SENSITIVITY,
         aimVectorRef.current.y + event.movementY * AIM_VECTOR_SENSITIVITY,
         aimVectorRef.current
       );
-
       aimVectorRef.current = next;
       setAimVector(next);
     };
@@ -215,7 +210,6 @@ export default function GameCanvas({ world, selfPlayerId, onMove, onAttack }: Ga
       if (event.button !== 0 || document.pointerLockElement !== shell) {
         return;
       }
-
       event.preventDefault();
       emitAimAttack();
     };
@@ -231,8 +225,9 @@ export default function GameCanvas({ world, selfPlayerId, onMove, onAttack }: Ga
       document.removeEventListener("mousemove", handleMouseMove);
       document.removeEventListener("mousedown", handleMouseDown);
     };
-  }, [emitAimAttack, onMove]);
+  }, [emitAimAttack]); // emitAimAttack é estável (useCallback sem deps)
 
+  // Canvas render loop — registra UMA VEZ
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) {
@@ -250,7 +245,6 @@ export default function GameCanvas({ world, selfPlayerId, onMove, onAttack }: Ga
     const resize = () => {
       const rect = canvas.getBoundingClientRect();
       const pixelRatio = Math.max(1, window.devicePixelRatio || 1);
-
       canvas.width = Math.floor(rect.width * pixelRatio);
       canvas.height = Math.floor(rect.height * pixelRatio);
       context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
@@ -310,7 +304,6 @@ export default function GameCanvas({ world, selfPlayerId, onMove, onAttack }: Ga
           });
           continue;
         }
-
         existing.name = player.name;
         existing.hp = player.hp;
         existing.maxHp = player.maxHp;
@@ -322,19 +315,15 @@ export default function GameCanvas({ world, selfPlayerId, onMove, onAttack }: Ga
       for (const player of renderedPlayers.values()) {
         const previousX = player.x;
         const previousY = player.y;
-
         player.x += (player.targetX - player.x) * alphaPlayer;
         player.y += (player.targetY - player.y) * alphaPlayer;
-
         const movedX = player.x - previousX;
         const movedY = player.y - previousY;
-
         if (movedX < -0.001) {
           player.facing = "left";
         } else if (movedX > 0.001) {
           player.facing = "right";
         }
-
         const remainingDistance = Math.hypot(player.targetX - player.x, player.targetY - player.y);
         const frameDistance = Math.hypot(movedX, movedY);
         player.moving = frameDistance > 0.001 || remainingDistance > 0.01;
@@ -396,7 +385,6 @@ export default function GameCanvas({ world, selfPlayerId, onMove, onAttack }: Ga
         context.lineTo(sx, renderOffsetY + mapPixelSize);
         context.stroke();
       }
-
       for (let y = 0; y <= currentWorld.mapSize; y += 1) {
         const sy = renderOffsetY + y * TILE_SIZE;
         context.beginPath();
@@ -413,12 +401,10 @@ export default function GameCanvas({ world, selfPlayerId, onMove, onAttack }: Ga
         const centerX = renderOffsetX + attack.x * TILE_SIZE + TILE_SIZE / 2;
         const centerY = renderOffsetY + attack.y * TILE_SIZE + TILE_SIZE / 2;
         const radius = Math.max(TILE_SIZE * 0.18, attack.radius * TILE_SIZE);
-
         context.fillStyle = "rgba(255, 35, 35, 0.35)";
         context.beginPath();
         context.arc(centerX, centerY, radius, 0, Math.PI * 2);
         context.fill();
-
         context.strokeStyle = "rgba(255, 90, 90, 0.9)";
         context.lineWidth = 2;
         context.beginPath();
@@ -466,12 +452,10 @@ export default function GameCanvas({ world, selfPlayerId, onMove, onAttack }: Ga
     if (event.button !== 0) {
       return;
     }
-
     const shell = mapShellRef.current;
     if (!shell || document.pointerLockElement === shell) {
       return;
     }
-
     const rect = shell.getBoundingClientRect();
     const centerX = rect.left + rect.width / 2;
     const centerY = rect.top + rect.height / 2;

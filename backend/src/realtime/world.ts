@@ -272,7 +272,7 @@ export function createPlayerAttack(
     }
   };
 }
-
+//aplica o movimento dos jogadores
 export function applyMovement(deltaSeconds: number, velocityTilesPerSecond: number): MovementComputation[] {
   const computations: MovementComputation[] = [];
 
@@ -320,7 +320,7 @@ export function applyMovement(deltaSeconds: number, velocityTilesPerSecond: numb
 
   return computations;
 }
-
+//aplica os danos dos ataques ativos nos jogadores atingidos
 export function applyAttackDamage(nowMs = Date.now()): AttackHitResult[] {
   cleanupExpiredAttacks(nowMs);
   const hits: AttackHitResult[] = [];
@@ -374,7 +374,7 @@ export function applyAttackDamage(nowMs = Date.now()): AttackHitResult[] {
 
   return hits;
 }
-
+//aplica os respawns dos jogadores mortos que ja passaram do tempo de respawn
 export function applyRespawns(nowMs = Date.now()): RespawnResult[] {
   const respawns: RespawnResult[] = [];
 
@@ -405,7 +405,7 @@ export function applyRespawns(nowMs = Date.now()): RespawnResult[] {
 
   return respawns;
 }
-
+//remove o jogador do mundo
 export function removeOnlinePlayer(socketId: string): OnlinePlayerState | null {
   const player = onlinePlayersBySocket.get(socketId);
   if (!player) {
@@ -427,7 +427,7 @@ export function removeOnlinePlayer(socketId: string): OnlinePlayerState | null {
 
   return player;
 }
-
+//coleta os estados sujos dos jogadores para enviar ao cliente e marca como limpo
 export function collectDirtyStates(): Array<{ characterId: number; x: number; y: number; hp: number }> {
   const dirty: Array<{ characterId: number; x: number; y: number; hp: number }> = [];
 
@@ -447,7 +447,7 @@ export function collectDirtyStates(): Array<{ characterId: number; x: number; y:
 
   return dirty;
 }
-
+//marca os jogadores como sujos para que suas informações sejam atualizadas no cliente
 export function markPlayersAsDirty(characterIds: number[]): void {
   if (characterIds.length === 0) {
     return;
@@ -464,7 +464,7 @@ export function markPlayersAsDirty(characterIds: number[]): void {
 export function listOnlineCharacterIds(): Set<number> {
   return new Set([...onlinePlayersBySocket.values()].map((player) => player.characterId));
 }
-
+//estado do mundo atual
 export function buildPublicPlayersSnapshot(): PublicPlayer[] {
   return [...onlinePlayersBySocket.values()]
     .map((player) => ({
@@ -480,7 +480,7 @@ export function buildPublicPlayersSnapshot(): PublicPlayer[] {
     }))
     .sort((a, b) => a.id - b.id);
 }
-
+//estado dos ataques ativos no mundo
 export function buildPublicAttacksSnapshot(nowMs = Date.now()): PublicAttack[] {
   cleanupExpiredAttacks(nowMs);
   return [...activeAttacksById.values()]

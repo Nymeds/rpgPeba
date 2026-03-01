@@ -105,6 +105,7 @@ export function startGameLoop(io: SocketIOServer): () => void {
     }
 
     tick += 1;
+   
     emitWorldUpdate(io, tick);
   }, TICK_INTERVAL_MS);
 
