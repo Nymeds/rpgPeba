@@ -13,7 +13,7 @@ import warriorRunGif from "../../images/Warrior/run.gif";
 import { setupInput } from "./input";
 import { PlayerType, type GameMapDefinition, type MoveInput, type WorldUpdatePayload } from "../types";
 
-const TILE_SIZE = 80;
+const TILE_SIZE = 160;
 const PLAYER_INTERPOLATION_RATE = 16;
 const CAMERA_INTERPOLATION_RATE = 12;
 const AIM_VECTOR_SENSITIVITY = 0.025;
