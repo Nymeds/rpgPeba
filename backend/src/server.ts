@@ -55,7 +55,7 @@ async function criarServidor() {
     }
   });
 
-  registrarEventosSocket(app, io);
+  await registrarEventosSocket(app, io);
   return { app, io };
 }
 

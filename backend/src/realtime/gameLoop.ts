@@ -1,7 +1,7 @@
 import { Server as SocketIOServer } from "socket.io";
 
 import { MAP_SIZE } from "../game.js";
-import { logInfo } from "../logger.js";
+import { logError, logInfo } from "../logger.js";
 import { appendSystemChatMessage } from "./chat.js";
 import { consumirSinalMapaAtualizado, obterMapRevision } from "./mapEditor.js";
 import {
@@ -108,8 +108,17 @@ export function startGameLoop(io: SocketIOServer): () => void {
       });
 
       if (hit.targetDied) {
-        const deathMessage = appendSystemChatMessage(`${hit.targetName} foi derrotado por ${hit.ownerName}.`);
-        io.emit("chat:message", deathMessage);
+        void appendSystemChatMessage(`${hit.targetName} foi derrotado por ${hit.ownerName}.`)
+          .then((deathMessage) => {
+            io.emit("chat:message", deathMessage);
+          })
+          .catch((error) => {
+            logError("CHAT", "Falha ao registrar mensagem de sistema", {
+              target: hit.targetName,
+              owner: hit.ownerName,
+              error: error instanceof Error ? error.message : "erro desconhecido"
+            });
+          });
       }
     }
 

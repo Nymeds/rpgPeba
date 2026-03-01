@@ -5,7 +5,7 @@ import { prisma } from "./db.js";
 import { MAP_SIZE, PlayerType, normalizarInventario, normalizarPlayerType } from "./game.js";
 import { logError, logInfo, logWarn } from "./logger.js";
 import { validarPayloadAtaque, validarPayloadMovimento } from "./schemas.js";
-import { appendChatMessage, buildChatHistoryPayload } from "./realtime/chat.js";
+import { appendChatMessage, buildChatHistoryPayload, initializeChatHistory } from "./realtime/chat.js";
 import { emitWorldUpdate, startGameLoop } from "./realtime/gameLoop.js";
 import type {
   ChatSendPayload,
@@ -144,12 +144,22 @@ async function persistirPosicaoDesconexao(app: FastifyInstance, session: SocketS
   }
 }
 
-export function registrarEventosSocket(app: FastifyInstance, io: SocketIOServer): void {
+export async function registrarEventosSocket(app: FastifyInstance, io: SocketIOServer): Promise<void> {
   if (realtimeJaInicializado) {
     logWarn("SOCKET", "Realtime ja inicializado, ignorando segundo bootstrap");
     return;
   }
   realtimeJaInicializado = true;
+
+  try {
+    await initializeChatHistory();
+  } catch (error) {
+    realtimeJaInicializado = false;
+    logError("CHAT", "Falha ao carregar historico inicial do chat", {
+      error: error instanceof Error ? error.message : "erro desconhecido"
+    });
+    throw error;
+  }
 
   const stopGameLoop = startGameLoop(io);
   const persistInterval = setInterval(() => {
@@ -355,7 +365,7 @@ export function registrarEventosSocket(app: FastifyInstance, io: SocketIOServer)
       responder(confirmacao, true);
     });
 
-    socket.on("chat:send", (payload: unknown, confirmacao?: SocketAck) => {
+    socket.on("chat:send", async (payload: unknown, confirmacao?: SocketAck) => {
       const parsedChat = parseChatPayload(payload);
       if (!parsedChat.ok) {
         responder(confirmacao, false, parsedChat.error);
@@ -367,16 +377,25 @@ export function registrarEventosSocket(app: FastifyInstance, io: SocketIOServer)
         return;
       }
 
-      const message = appendChatMessage(session.characterId, session.characterName, parsedChat.text);
-      io.emit("chat:message", message);
-      responder(confirmacao, true);
+      try {
+        const message = await appendChatMessage(session.characterId, session.characterName, parsedChat.text);
+        io.emit("chat:message", message);
+        responder(confirmacao, true);
 
-      logInfo("CHAT", "Mensagem enviada", {
-        player: session.characterName,
-        socket: socket.id,
-        messageId: message.id,
-        chars: message.text.length
-      });
+        logInfo("CHAT", "Mensagem enviada", {
+          player: session.characterName,
+          socket: socket.id,
+          messageId: message.id,
+          chars: message.text.length
+        });
+      } catch (error) {
+        responder(confirmacao, false, "Falha ao persistir mensagem no banco.");
+        logError("CHAT", "Falha ao persistir mensagem de chat", {
+          player: session.characterName,
+          socket: socket.id,
+          error: error instanceof Error ? error.message : "erro desconhecido"
+        });
+      }
     });
 
     socket.on("disconnect", (reason) => {
