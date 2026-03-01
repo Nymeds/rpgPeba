@@ -1,15 +1,25 @@
 import { type MouseEvent as ReactMouseEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import idleGif from "../../images/Warrior/idle.gif";
-import runGif from "../../images/Warrior/run.gif";
+import monkAttack1Gif from "../../images/Monk/attack1.gif";
+import monkAttack2Gif from "../../images/Monk/attack2.gif";
+import monkHealEffectGif from "../../images/Monk/healEffect.gif";
+import monkIdleGif from "../../images/Monk/idle.gif";
+import monkRunGif from "../../images/Monk/run.gif";
+import warriorAttack1Gif from "../../images/Warrior/attack1.gif";
+import warriorAttack2Gif from "../../images/Warrior/attack2.gif";
+import warriorHurtGif from "../../images/Warrior/hurt.gif";
+import warriorIdleGif from "../../images/Warrior/idle.gif";
+import warriorRunGif from "../../images/Warrior/run.gif";
 import { setupInput } from "./input";
-import type { MoveInput, WorldUpdatePayload } from "../types";
+import { PlayerType, type MoveInput, type WorldUpdatePayload } from "../types";
 
 const TILE_SIZE = 80;
 const PLAYER_INTERPOLATION_RATE = 16;
 const CAMERA_INTERPOLATION_RATE = 12;
 const AIM_VECTOR_SENSITIVITY = 0.025;
 const ATTACK_RANGE_TILES = 1;
+const WARRIOR_ATTACK_ANIMATION_MS = 5000;
+const MONK_HEAL_ANIMATION_MS = 4000;
 
 type CameraState = {
   x: number;
@@ -27,8 +37,10 @@ type RenderPlayer = {
   hp: number;
   maxHp: number;
   online: boolean;
+  playerType: PlayerType;
   facing: "left" | "right";
   moving: boolean;
+  hurtUntilMs: number;
 };
 
 type OverlaySprite = {
@@ -39,9 +51,20 @@ type OverlaySprite = {
   size: number;
   hp: number;
   maxHp: number;
+  playerType: PlayerType;
   facing: "left" | "right";
   moving: boolean;
+  hurt: boolean;
+  attacking: boolean;
+  attackPhaseTwo: boolean;
   self: boolean;
+};
+
+type OverlayHealEffect = {
+  id: number;
+  left: number;
+  top: number;
+  size: number;
 };
 
 type AttackAimInput = {
@@ -96,6 +119,28 @@ function angleDegFromVector(x: number, y: number): number {
   return (Math.atan2(y, x) * 180) / Math.PI;
 }
 
+function escolherSpriteGif(
+  sprite: Pick<OverlaySprite, "playerType" | "moving" | "hurt" | "attacking" | "attackPhaseTwo">
+): string {
+  // Monk nao possui gif de hurt, entao reaproveitamos o idle no estado de dano.
+  if (sprite.attacking) {
+    if (sprite.playerType === PlayerType.MONK) {
+      return sprite.attackPhaseTwo ? monkAttack2Gif : monkAttack1Gif;
+    }
+    return sprite.attackPhaseTwo ? warriorAttack2Gif : warriorAttack1Gif;
+  }
+
+  if (sprite.hurt) {
+    return sprite.playerType === PlayerType.MONK ? monkIdleGif : warriorHurtGif;
+  }
+
+  if (sprite.moving) {
+    return sprite.playerType === PlayerType.MONK ? monkRunGif : warriorRunGif;
+  }
+
+  return sprite.playerType === PlayerType.MONK ? monkIdleGif : warriorIdleGif;
+}
+
 export default function GameCanvas({ world, selfPlayerId, onMove, onAttack }: GameCanvasProps) {
   const mapShellRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -107,8 +152,12 @@ export default function GameCanvas({ world, selfPlayerId, onMove, onAttack }: Ga
   const onAttackRef = useRef(onAttack);
   const onMoveRef = useRef(onMove);
   const aimVectorRef = useRef<{ x: number; y: number }>({ x: 1, y: 0 });
+  const attackAnimationByOwnerRef = useRef<
+    Map<number, { attackId: number; kind: "damage" | "heal"; startedAtMs: number; endsAtMs: number }>
+  >(new Map());
 
   const [overlaySprites, setOverlaySprites] = useState<OverlaySprite[]>([]);
+  const [overlayHealEffects, setOverlayHealEffects] = useState<OverlayHealEffect[]>([]);
   const [aimLocked, setAimLocked] = useState(false);
   const [aimVector, setAimVector] = useState<{ x: number; y: number }>({ x: 1, y: 0 });
 
@@ -139,7 +188,7 @@ export default function GameCanvas({ world, selfPlayerId, onMove, onAttack }: Ga
     }
     const centerX = selfSprite.left + selfSprite.size / 2;
     const centerY = selfSprite.top + selfSprite.size / 2;
-    const radius = selfSprite.size * 0.84;
+    const radius = selfSprite.size * 0.58;
     const angle = angleDegFromVector(aimVector.x, aimVector.y);
     return {
       lineLeft: centerX,
@@ -256,6 +305,7 @@ export default function GameCanvas({ world, selfPlayerId, onMove, onAttack }: Ga
       }
 
       const nowMs = performance.now();
+      const wallNowMs = Date.now();
       const previousFrameAt = lastFrameAtRef.current;
       lastFrameAtRef.current = nowMs;
       const deltaSeconds =
@@ -272,7 +322,9 @@ export default function GameCanvas({ world, selfPlayerId, onMove, onAttack }: Ga
 
       if (!currentWorld || !currentSelfId) {
         renderedPlayersRef.current.clear();
+        attackAnimationByOwnerRef.current.clear();
         setOverlaySprites([]);
+        setOverlayHealEffects([]);
         context.fillStyle = "#f3f6f8";
         context.font = "600 20px Rajdhani";
         context.fillText("Conectando no mundo...", 26, 44);
@@ -299,15 +351,21 @@ export default function GameCanvas({ world, selfPlayerId, onMove, onAttack }: Ga
             hp: player.hp,
             maxHp: player.maxHp,
             online: player.online,
+            playerType: player.playerType,
             facing: "right",
-            moving: false
+            moving: false,
+            hurtUntilMs: 0
           });
           continue;
+        }
+        if (player.hp < existing.hp) {
+          existing.hurtUntilMs = nowMs + 260;
         }
         existing.name = player.name;
         existing.hp = player.hp;
         existing.maxHp = player.maxHp;
         existing.online = player.online;
+        existing.playerType = player.playerType;
         existing.targetX = player.x;
         existing.targetY = player.y;
       }
@@ -339,6 +397,7 @@ export default function GameCanvas({ world, selfPlayerId, onMove, onAttack }: Ga
 
       if (!selfPlayer) {
         setOverlaySprites([]);
+        setOverlayHealEffects([]);
         context.fillStyle = "#f3f6f8";
         context.font = "600 20px Rajdhani";
         context.fillText("Aguardando seu personagem no snapshot...", 26, 44);
@@ -397,9 +456,23 @@ export default function GameCanvas({ world, selfPlayerId, onMove, onAttack }: Ga
       context.lineWidth = 2;
       context.strokeRect(renderOffsetX, renderOffsetY, mapPixelSize, mapPixelSize);
 
+      const nextHealEffects: OverlayHealEffect[] = [];
       for (const attack of currentWorld.attacks) {
         const centerX = renderOffsetX + attack.x * TILE_SIZE + TILE_SIZE / 2;
         const centerY = renderOffsetY + attack.y * TILE_SIZE + TILE_SIZE / 2;
+
+        if (attack.kind === "heal") {
+          // Monk usa efeito visual dedicado no lugar de circulo.
+          const effectSize = Math.round(TILE_SIZE * 1.6);
+          nextHealEffects.push({
+            id: attack.id,
+            left: Math.round(centerX - effectSize / 2),
+            top: Math.round(centerY - effectSize / 2),
+            size: effectSize
+          });
+          continue;
+        }
+
         const radius = Math.max(TILE_SIZE * 0.18, attack.radius * TILE_SIZE);
         context.fillStyle = "rgba(255, 35, 35, 0.35)";
         context.beginPath();
@@ -411,6 +484,27 @@ export default function GameCanvas({ world, selfPlayerId, onMove, onAttack }: Ga
         context.arc(centerX, centerY, radius, 0, Math.PI * 2);
         context.stroke();
       }
+      setOverlayHealEffects(nextHealEffects);
+
+      const attackAnimations = attackAnimationByOwnerRef.current;
+      for (const attack of currentWorld.attacks) {
+        const existing = attackAnimations.get(attack.ownerId);
+        if (!existing || existing.attackId !== attack.id) {
+          const animationDurationMs =
+            attack.kind === "heal" ? MONK_HEAL_ANIMATION_MS : WARRIOR_ATTACK_ANIMATION_MS;
+          attackAnimations.set(attack.ownerId, {
+            attackId: attack.id,
+            kind: attack.kind,
+            startedAtMs: wallNowMs,
+            endsAtMs: wallNowMs + animationDurationMs
+          });
+        }
+      }
+      for (const [ownerId, animation] of attackAnimations.entries()) {
+        if (animation.endsAtMs <= wallNowMs) {
+          attackAnimations.delete(ownerId);
+        }
+      }
 
       const sprites: OverlaySprite[] = [];
       for (const player of renderedPlayers.values()) {
@@ -419,6 +513,12 @@ export default function GameCanvas({ world, selfPlayerId, onMove, onAttack }: Ga
         const spriteSize = TILE_SIZE;
         const drawX = Math.round(centerX - spriteSize / 2);
         const drawY = Math.round(floorY - spriteSize);
+        const attackAnimation = attackAnimations.get(player.id) ?? null;
+        const attacking = Boolean(attackAnimation && attackAnimation.endsAtMs > wallNowMs);
+        const attackPhaseTwo = attacking
+          ? wallNowMs - (attackAnimation?.startedAtMs ?? wallNowMs) >=
+            ((attackAnimation?.endsAtMs ?? wallNowMs) - (attackAnimation?.startedAtMs ?? wallNowMs)) / 2
+          : false;
         sprites.push({
           id: player.id,
           name: player.name,
@@ -427,8 +527,12 @@ export default function GameCanvas({ world, selfPlayerId, onMove, onAttack }: Ga
           size: spriteSize,
           hp: player.hp,
           maxHp: player.maxHp,
+          playerType: player.playerType,
           facing: player.facing,
           moving: player.moving,
+          hurt: nowMs <= player.hurtUntilMs,
+          attacking,
+          attackPhaseTwo,
           self: player.id === currentSelfId
         });
       }
@@ -468,6 +572,22 @@ export default function GameCanvas({ world, selfPlayerId, onMove, onAttack }: Ga
   return (
     <div ref={mapShellRef} className="map-shell" onMouseDown={handleMapShellMouseDown}>
       <canvas ref={canvasRef} className="map-canvas" />
+      <div className="heal-effect-layer" aria-hidden="true">
+        {overlayHealEffects.map((effect) => (
+          <img
+            key={effect.id}
+            src={monkHealEffectGif}
+            alt=""
+            className="heal-effect-gif"
+            style={{
+              left: effect.left,
+              top: effect.top,
+              width: effect.size,
+              height: effect.size
+            }}
+          />
+        ))}
+      </div>
       <div className="sprite-layer" aria-hidden="true">
         {overlaySprites.map((sprite) => (
           <div
@@ -484,7 +604,7 @@ export default function GameCanvas({ world, selfPlayerId, onMove, onAttack }: Ga
               <span style={{ width: `${healthPercent(sprite.hp, sprite.maxHp)}%` }} />
             </div>
             <img
-              src={sprite.moving ? runGif : idleGif}
+              src={escolherSpriteGif(sprite)}
               alt=""
               className={`player-sprite-img ${sprite.facing === "left" ? "flip-left" : ""}`}
             />

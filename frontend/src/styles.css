@@ -133,6 +133,64 @@ input:focus {
   outline-offset: 1px;
 }
 
+.class-picker {
+  margin: 2px 0 4px;
+  border: 1px solid rgba(116, 163, 220, 0.34);
+  border-radius: 11px;
+  padding: 10px;
+  background: rgba(8, 15, 24, 0.7);
+}
+
+.class-picker legend {
+  padding: 0 6px;
+  color: var(--ink-soft);
+  font-size: 0.82rem;
+}
+
+.class-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.class-option {
+  border: 1px solid rgba(114, 158, 216, 0.36);
+  border-radius: 10px;
+  background: rgba(11, 19, 30, 0.84);
+  color: var(--ink);
+  padding: 8px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  text-align: left;
+}
+
+.class-option.selected {
+  border-color: rgba(78, 240, 111, 0.82);
+  box-shadow: inset 0 0 0 1px rgba(78, 240, 111, 0.24);
+}
+
+.class-option strong {
+  font-family: "Rajdhani", sans-serif;
+  font-size: 1rem;
+}
+
+.class-option small {
+  color: var(--ink-soft);
+  font-size: 0.76rem;
+  line-height: 1.2;
+}
+
+.class-option-gif {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  object-fit: contain;
+  border-radius: 8px;
+  border: 1px solid rgba(89, 132, 190, 0.34);
+  background: rgba(5, 10, 16, 0.82);
+}
+
 .btn-primary,
 .btn-ghost,
 .btn-link {
@@ -386,12 +444,26 @@ input:focus {
   inset: 0;
   pointer-events: none;
   overflow: hidden;
+  z-index: 3;
+}
+
+.heal-effect-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
   z-index: 2;
+}
+
+.heal-effect-gif {
+  position: absolute;
+  object-fit: contain;
+  filter: drop-shadow(0 0 7px rgba(110, 255, 171, 0.5));
 }
 
 .attack-aim-line {
   position: absolute;
-  height: 3px;
+  height: 2px;
   transform-origin: left center;
   border-radius: 999px;
   background: linear-gradient(90deg, rgba(104, 196, 255, 0.18), rgba(120, 233, 255, 0.95));
@@ -404,9 +476,9 @@ input:focus {
   position: absolute;
   width: 0;
   height: 0;
-  border-top: 8px solid transparent;
-  border-bottom: 8px solid transparent;
-  border-left: 18px solid #7fe0ff;
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+  border-left: 11px solid #7fe0ff;
   filter: drop-shadow(0 0 6px rgba(126, 224, 255, 0.5));
   pointer-events: none;
   z-index: 4;
@@ -551,5 +623,11 @@ input:focus {
 
   .map-shell {
     aspect-ratio: 4 / 3;
+  }
+}
+
+@media (max-width: 560px) {
+  .class-picker-grid {
+    grid-template-columns: 1fr;
   }
 }

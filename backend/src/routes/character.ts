@@ -8,7 +8,13 @@ import { prisma } from "../db.js";
 
 // Tecnico: Regras do jogo e funcoes de inventario.
 // Crianca: Pecas que ajudam a criar o personagem e mochila.
-import { INVENTORY_SLOTS, PlayerType, normalizarInventario, serializarInventario, SPAWN_POSITION } from "../game.js";
+import {
+  INVENTORY_SLOTS,
+  normalizarInventario,
+  normalizarPlayerType,
+  serializarInventario,
+  SPAWN_POSITION
+} from "../game.js";
 
 // Tecnico: Validadores (com Zod por baixo) para manter o fluxo limpo.
 // Crianca: Regras do heroi e da mochila.
@@ -70,6 +76,19 @@ export const rotasPersonagem: FastifyPluginAsync = async (app) => {
         });
       }
 
+      // Tecnico: Busca a classe salva no cadastro para anexar no personagem retornado.
+      // Crianca: Descobre se essa conta escolheu Monk ou Warrior.
+      const account = await prisma.account.findUnique({
+        where: { id: request.user.accountId },
+        select: { playerType: true }
+      });
+
+      if (!account) {
+        return reply.status(404).send({
+          error: "Conta nao encontrada."
+        });
+      }
+
       // Tecnico: Cria personagem no spawn com HP cheio e inventario vazio serializado.
       // Crianca: Nasce no centro, vida completa e mochila vazia.
       const createdCharacter = await prisma.character.create({
@@ -89,7 +108,7 @@ export const rotasPersonagem: FastifyPluginAsync = async (app) => {
         character: {
           ...createdCharacter,
           inventory: normalizarInventario(createdCharacter.inventory),
-          playerType: PlayerType.WARRIOR
+          playerType: normalizarPlayerType(account.playerType)
         }
       });
     }
@@ -107,7 +126,14 @@ export const rotasPersonagem: FastifyPluginAsync = async (app) => {
       // Crianca: Procura o heroi desse jogador.
       const character = await prisma.character.findUnique({
         where: { accountId: request.user.accountId },
-        select: characterSelect
+        select: {
+          ...characterSelect,
+          account: {
+            select: {
+              playerType: true
+            }
+          }
+        }
       });
 
       if (!character) {
@@ -116,11 +142,13 @@ export const rotasPersonagem: FastifyPluginAsync = async (app) => {
         });
       }
 
+      const { account, ...publicCharacter } = character;
+
       return reply.send({
         character: {
-          ...character,
-          inventory: normalizarInventario(character.inventory),
-          playerType: PlayerType.WARRIOR
+          ...publicCharacter,
+          inventory: normalizarInventario(publicCharacter.inventory),
+          playerType: normalizarPlayerType(account.playerType)
         }
       });
     }
@@ -150,7 +178,12 @@ export const rotasPersonagem: FastifyPluginAsync = async (app) => {
         where: { accountId: request.user.accountId },
         select: {
           id: true,
-          inventory: true
+          inventory: true,
+          account: {
+            select: {
+              playerType: true
+            }
+          }
         }
       });
 
@@ -179,7 +212,7 @@ export const rotasPersonagem: FastifyPluginAsync = async (app) => {
         character: {
           ...updatedCharacter,
           inventory: normalizarInventario(updatedCharacter.inventory),
-          playerType: PlayerType.WARRIOR
+          playerType: normalizarPlayerType(character.account.playerType)
         }
       });
     }

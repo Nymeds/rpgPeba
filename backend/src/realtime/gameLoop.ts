@@ -82,11 +82,24 @@ export function startGameLoop(io: SocketIOServer): () => void {
     }
 
     for (const hit of attackHits) {
+      if (hit.effect === "heal") {
+        logInfo("ATACK", "Cura aplicada", {
+          attackId: hit.attackId,
+          owner: hit.ownerName,
+          target: hit.targetName,
+          targetId: hit.targetCharacterId,
+          amount: hit.amount,
+          hpAfter: hit.hpAfter
+        });
+        continue;
+      }
+
       logInfo("ATACK", "Dano aplicado", {
         attackId: hit.attackId,
         owner: hit.ownerName,
         target: hit.targetName,
         targetId: hit.targetCharacterId,
+        amount: hit.amount,
         hpAfter: hit.hpAfter,
         dead: hit.targetDied
       });

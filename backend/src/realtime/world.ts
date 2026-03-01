@@ -1,11 +1,22 @@
-import { MAP_SIZE, PlayerType, SPAWN_POSITION, limitarAoMapa, type PublicAttack, type PublicPlayer } from "../game.js";
+import {
+  MAP_SIZE,
+  PlayerType,
+  SPAWN_POSITION,
+  limitarAoMapa,
+  type AttackKind,
+  type PublicAttack,
+  type PublicPlayer
+} from "../game.js";
 import type { Direction } from "./types.js";
 
 const ATTACK_DAMAGE = 20;
-const ATTACK_DURATION_MS = 500;
+const MONK_HEAL_AMOUNT = 16;
 const ATTACK_DEFAULT_RANGE = 1;
 const ATTACK_RADIUS_TILES = 0.65;
-const ATTACK_COOLDOWN_MS = 500;
+const WARRIOR_ATTACK_AREA_DURATION_MS = 3000;
+const MONK_HEAL_EFFECT_DURATION_MS = 4000;
+const WARRIOR_ATTACK_COOLDOWN_MS = 5000;
+const MONK_HEAL_COOLDOWN_MS = 4000;
 const RESPAWN_DELAY_MS = 3000;
 
 export type InputVector = {
@@ -50,6 +61,7 @@ export type AttackCreationResult = {
   attackId: number;
   ownerCharacterId: number;
   ownerName: string;
+  kind: AttackKind;
   directionX: number;
   directionY: number;
   x: number;
@@ -63,8 +75,10 @@ export type AttackHitResult = {
   attackId: number;
   ownerCharacterId: number;
   ownerName: string;
+  effect: AttackKind;
   targetCharacterId: number;
   targetName: string;
+  amount: number;
   hpAfter: number;
   targetDied: boolean;
 };
@@ -84,6 +98,7 @@ type ActiveAttackState = {
   id: number;
   ownerCharacterId: number;
   ownerName: string;
+  kind: AttackKind;
   x: number;
   y: number;
   radius: number;
@@ -162,6 +177,18 @@ function cleanupExpiredAttacks(nowMs: number): void {
   }
 }
 
+function attackKindFromPlayerType(playerType: PlayerType): AttackKind {
+  return playerType === PlayerType.MONK ? "heal" : "damage";
+}
+
+function attackDurationMs(kind: AttackKind): number {
+  return kind === "heal" ? MONK_HEAL_EFFECT_DURATION_MS : WARRIOR_ATTACK_AREA_DURATION_MS;
+}
+
+function attackCooldownMs(kind: AttackKind): number {
+  return kind === "heal" ? MONK_HEAL_COOLDOWN_MS : WARRIOR_ATTACK_COOLDOWN_MS;
+}
+
 export function registerOnlinePlayer(input: RegisterOnlinePlayerInput): string | null {
   const previousSocketId = socketByCharacterId.get(input.characterId) ?? null;
 
@@ -226,7 +253,8 @@ export function createPlayerAttack(
     return { ok: false, error: "Voce esta morto e nao pode atacar." };
   }
 
-  const remainingCooldownMs = player.lastAttackAtMs + ATTACK_COOLDOWN_MS - nowMs;
+  const kind = attackKindFromPlayerType(player.playerType);
+  const remainingCooldownMs = player.lastAttackAtMs + attackCooldownMs(kind) - nowMs;
   if (remainingCooldownMs > 0) {
     return { ok: false, error: `Ataque em cooldown (${remainingCooldownMs}ms).` };
   }
@@ -242,13 +270,14 @@ export function createPlayerAttack(
   const attackX = limitarAoMapa(player.x + normalizedDirection.x * range);
   const attackY = limitarAoMapa(player.y + normalizedDirection.y * range);
   const attackId = nextAttackId++;
-  const expiresAt = nowMs + ATTACK_DURATION_MS;
+  const expiresAt = nowMs + attackDurationMs(kind);
   player.lastAttackAtMs = nowMs;
 
   activeAttacksById.set(attackId, {
     id: attackId,
     ownerCharacterId: player.characterId,
     ownerName: player.name,
+    kind,
     x: attackX,
     y: attackY,
     radius: ATTACK_RADIUS_TILES,
@@ -262,6 +291,7 @@ export function createPlayerAttack(
       attackId,
       ownerCharacterId: player.characterId,
       ownerName: player.name,
+      kind,
       directionX: normalizedDirection.x,
       directionY: normalizedDirection.y,
       x: attackX,
@@ -320,7 +350,7 @@ export function applyMovement(deltaSeconds: number, velocityTilesPerSecond: numb
 
   return computations;
 }
-//aplica os danos dos ataques ativos nos jogadores atingidos
+//aplica os efeitos dos ataques ativos nos jogadores atingidos
 export function applyAttackDamage(nowMs = Date.now()): AttackHitResult[] {
   cleanupExpiredAttacks(nowMs);
   const hits: AttackHitResult[] = [];
@@ -350,7 +380,35 @@ export function applyAttackDamage(nowMs = Date.now()): AttackHitResult[] {
         continue;
       }
 
+      if (attack.kind === "heal" && player.hp >= player.maxHp) {
+        continue;
+      }
+
       attack.hitCharacterIds.add(player.characterId);
+
+      if (attack.kind === "heal") {
+        const hpBefore = player.hp;
+        player.hp = Math.min(player.maxHp, player.hp + MONK_HEAL_AMOUNT);
+        const healedAmount = player.hp - hpBefore;
+        if (healedAmount <= 0) {
+          continue;
+        }
+        player.dirtyState = true;
+
+        hits.push({
+          attackId: attack.id,
+          ownerCharacterId: attack.ownerCharacterId,
+          ownerName: attack.ownerName,
+          effect: "heal",
+          targetCharacterId: player.characterId,
+          targetName: player.name,
+          amount: healedAmount,
+          hpAfter: player.hp,
+          targetDied: false
+        });
+        continue;
+      }
+
       player.hp = Math.max(0, player.hp - ATTACK_DAMAGE);
       const targetDied = player.hp === 0;
       if (targetDied) {
@@ -364,8 +422,10 @@ export function applyAttackDamage(nowMs = Date.now()): AttackHitResult[] {
         attackId: attack.id,
         ownerCharacterId: attack.ownerCharacterId,
         ownerName: attack.ownerName,
+        effect: "damage",
         targetCharacterId: player.characterId,
         targetName: player.name,
+        amount: ATTACK_DAMAGE,
         hpAfter: player.hp,
         targetDied
       });
@@ -490,6 +550,7 @@ export function buildPublicAttacksSnapshot(nowMs = Date.now()): PublicAttack[] {
       x: attack.x,
       y: attack.y,
       radius: attack.radius,
+      kind: attack.kind,
       expiresAt: attack.expiresAt
     }))
     .sort((a, b) => a.id - b.id);

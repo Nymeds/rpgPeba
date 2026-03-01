@@ -3,7 +3,9 @@ import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { autenticarConta, carregarSessao, criarPersonagem, registrarConta } from "./api";
 import GameCanvas from "./game/GameCanvas";
 import { useGameSocket } from "./game/useGameSocket";
-import type { Account, AuthResponse, Character, PublicPlayer } from "./types";
+import monkIdleGif from "../images/Monk/idle.gif";
+import warriorIdleGif from "../images/Warrior/idle.gif";
+import { PlayerType, type Account, type AuthResponse, type Character, type PublicPlayer } from "./types";
 
 type AuthMode = "login" | "register";
 
@@ -28,10 +30,14 @@ function statusSessao(account: Account | null, character: Character | null): str
   }
 
   if (!character) {
-    return `Conta @${account.username} ativa. Falta criar seu personagem.`;
+    return `Conta @${account.username} ativa (${rotuloClasse(account.playerType)}). Falta criar seu personagem.`;
   }
 
-  return `Logado como @${account.username} com ${character.name}.`;
+  return `Logado como @${account.username} com ${character.name} (${rotuloClasse(character.playerType)}).`;
+}
+
+function rotuloClasse(playerType: PlayerType): string {
+  return playerType === PlayerType.MONK ? "Monk" : "Knight";
 }
 
 function formatarHora(timestamp: number): string {
@@ -63,6 +69,7 @@ export default function App() {
   const [authMode, setAuthMode] = useState<AuthMode>("login");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [selectedPlayerType, setSelectedPlayerType] = useState<PlayerType>(PlayerType.WARRIOR);
   const [characterName, setCharacterName] = useState("");
   const [chatInput, setChatInput] = useState("");
 
@@ -183,7 +190,12 @@ export default function App() {
       };
 
       const response =
-        authMode === "login" ? await autenticarConta(credentials) : await registrarConta(credentials);
+        authMode === "login"
+          ? await autenticarConta(credentials)
+          : await registrarConta({
+              ...credentials,
+              playerType: selectedPlayerType
+            });
 
       aplicarRespostaAuth(response);
       setPassword("");
@@ -256,6 +268,7 @@ export default function App() {
     setCharacter(null);
     setUsername("");
     setPassword("");
+    setSelectedPlayerType(PlayerType.WARRIOR);
     setCharacterName("");
     setChatInput("");
     setNotice("Logout feito.");
@@ -302,6 +315,33 @@ export default function App() {
               autoComplete={authMode === "login" ? "current-password" : "new-password"}
             />
 
+            {authMode === "register" ? (
+              <fieldset className="class-picker" aria-label="Escolha sua classe">
+                <legend>Escolha sua classe inicial</legend>
+                <div className="class-picker-grid">
+                  <button
+                    type="button"
+                    className={`class-option ${selectedPlayerType === PlayerType.WARRIOR ? "selected" : ""}`}
+                    onClick={() => setSelectedPlayerType(PlayerType.WARRIOR)}
+                  >
+                    <img src={warriorIdleGif} alt="Knight idle" className="class-option-gif" />
+                    <strong>Knight (Warrior)</strong>
+                    <small>Ataque padrao corpo a corpo.</small>
+                  </button>
+
+                  <button
+                    type="button"
+                    className={`class-option ${selectedPlayerType === PlayerType.MONK ? "selected" : ""}`}
+                    onClick={() => setSelectedPlayerType(PlayerType.MONK)}
+                  >
+                    <img src={monkIdleGif} alt="Monk idle" className="class-option-gif" />
+                    <strong>Monk</strong>
+                    <small>Cura aliados no lugar de causar dano.</small>
+                  </button>
+                </div>
+              </fieldset>
+            ) : null}
+
             <button type="submit" disabled={busy} className="btn-primary">
               {busy ? "Aguarde..." : authMode === "login" ? "Entrar" : "Registrar"}
             </button>
@@ -321,6 +361,9 @@ export default function App() {
         <section className="panel card-center">
           <h2>Criar personagem</h2>
           <p>Uma conta so pode ter um personagem neste prototipo.</p>
+          <p>
+            Classe selecionada no cadastro: <strong>{rotuloClasse(account?.playerType ?? PlayerType.WARRIOR)}</strong>
+          </p>
 
           <form onSubmit={onSubmitCharacter} className="stack-form">
             <label htmlFor="charName">Nome do personagem</label>
@@ -459,6 +502,9 @@ export default function App() {
                 <strong>Personagem:</strong> {character.name}
               </p>
               <p>
+                <strong>Classe:</strong> {rotuloClasse(character.playerType)}
+              </p>
+              <p>
                 <strong>HP:</strong> {selfWorldPlayer?.hp ?? character.hp}/{selfWorldPlayer?.maxHp ?? character.maxHp}
               </p>
               <p>
@@ -466,6 +512,9 @@ export default function App() {
               </p>
               <p>
                 <strong>Ataque:</strong> clique no centro da arena para ativar mira; ataque com clique ou espaco.
+              </p>
+              <p>
+                <strong>Habilidade:</strong> Warrior causa dano, Monk cura outros players.
               </p>
 
               <button type="button" className="btn-ghost" onClick={logout}>

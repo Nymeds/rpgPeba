@@ -11,6 +11,7 @@ model Account {
   id           Int       @id @default(autoincrement())
   username     String    @unique
   passwordHash String
+  playerType   String    @default("WARRIOR")
   createdAt    DateTime  @default(now())
   character    Character?
 }

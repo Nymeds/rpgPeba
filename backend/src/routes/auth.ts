@@ -12,7 +12,7 @@ import { prisma } from "../db.js";
 
 // Tecnico: Normaliza inventario do banco para formato fixo no retorno.
 // Crianca: Arruma a mochila antes de mostrar no app.
-import { PlayerType, normalizarInventario } from "../game.js";
+import { normalizarInventario, normalizarPlayerType } from "../game.js";
 
 // Tecnico: Validacoes de entrada (implementadas com Zod por baixo).
 // Crianca: Regras para conferir formulario.
@@ -23,6 +23,7 @@ import { validarCorpoCadastro, validarCorpoLogin } from "../schemas.js";
 type AccountWithCharacter = {
   id: number;
   username: string;
+  playerType: string;
   character: {
     id: number;
     name: string;
@@ -39,6 +40,7 @@ type AccountWithCharacter = {
 const accountSelect = {
   id: true,
   username: true,
+  playerType: true,
   character: {
     select: {
       id: true,
@@ -59,6 +61,7 @@ function montarRespostaAutenticacao(app: FastifyInstance, account: AccountWithCh
     accountId: account.id,
     username: account.username
   });
+  const playerType = normalizarPlayerType(account.playerType);
 
   // Tecnico: Personagem pode ser nulo quando conta ainda nao criou heroi.
   // Crianca: Se nao existe heroi ainda, devolve vazio.
@@ -69,11 +72,11 @@ function montarRespostaAutenticacao(app: FastifyInstance, account: AccountWithCh
         x: account.character.x,
         y: account.character.y,
         hp: account.character.hp,
-      maxHp: account.character.maxHp,
-      inventory: normalizarInventario(account.character.inventory),
-      playerType: PlayerType.WARRIOR
-    }
-  : null;
+        maxHp: account.character.maxHp,
+        inventory: normalizarInventario(account.character.inventory),
+        playerType
+      }
+    : null;
 
   // Tecnico: Retorno padrao da camada de autenticacao.
   // Crianca: Entrega cracha + dados basicos da conta e do heroi.
@@ -81,7 +84,8 @@ function montarRespostaAutenticacao(app: FastifyInstance, account: AccountWithCh
     token,
     account: {
       id: account.id,
-      username: account.username
+      username: account.username,
+      playerType
     },
     character
   };
@@ -121,7 +125,8 @@ export const rotasAutenticacao: FastifyPluginAsync = async (app) => {
     const account = await prisma.account.create({
       data: {
         username,
-        passwordHash
+        passwordHash,
+        playerType: parsedBody.data.playerType
       },
       select: accountSelect
     });
@@ -174,6 +179,7 @@ export const rotasAutenticacao: FastifyPluginAsync = async (app) => {
       montarRespostaAutenticacao(app, {
         id: account.id,
         username: account.username,
+        playerType: account.playerType,
         character: account.character
       })
     );

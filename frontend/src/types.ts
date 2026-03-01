@@ -2,8 +2,7 @@ export type Direction = "up" | "down" | "left" | "right";
 
 export enum PlayerType {
   WARRIOR = "WARRIOR",
-  MAGE = "MAGE",
-  ARCHER = "ARCHER"
+  MONK = "MONK"
 }
 
 export type InventorySlot = string | null;
@@ -16,6 +15,7 @@ export type MoveInput = {
 export type Account = {
   id: number;
   username: string;
+  playerType: PlayerType;
 };
 
 export type Character = {
@@ -53,6 +53,7 @@ export type PublicAttack = {
   x: number;
   y: number;
   radius: number;
+  kind: "damage" | "heal";
   expiresAt: number;
 };
 

@@ -1,6 +1,7 @@
 // Tecnico: Zod valida payloads com regras declarativas.
 // Crianca: Fiscal que checa se os dados chegaram certinhos.
 import { z } from "zod";
+import { PlayerType } from "./game.js";
 
 // Tecnico: Resultado padrao das funcoes validate*.
 // Crianca: Diz se passou na prova e, se nao passou, mostra os erros.
@@ -27,6 +28,12 @@ const authBodySchema = z.object({
     .string()
     .min(6, "password: minimo 6 caracteres.")
     .max(72, "password: maximo 72 caracteres.")
+});
+
+// Tecnico: Cadastro aceita classe inicial do personagem.
+// Crianca: No registro o jogador escolhe Monk ou Warrior.
+const registerBodySchema = authBodySchema.extend({
+  playerType: z.nativeEnum(PlayerType).optional()
 });
 
 // Tecnico: Schema para criacao de personagem.
@@ -70,6 +77,7 @@ const attackPayloadSchema = z.object({
 // Tecnico: Tipos inferidos automaticamente do schema.
 // Crianca: TypeScript aprende o formato certo sozinho.
 export type AuthBody = z.infer<typeof authBodySchema>;
+export type RegisterBody = AuthBody & { playerType: PlayerType };
 export type CreateCharacterBody = z.infer<typeof createCharacterBodySchema>;
 export type InventoryUpdateBody = z.infer<typeof inventoryUpdateBodySchema>;
 export type MovePayload = z.infer<typeof movePayloadSchema>;
@@ -101,8 +109,19 @@ function validarComSchema<T>(schema: z.ZodType<T>, payload: unknown): Validation
   };
 }
 
-export function validarCorpoCadastro(body: unknown): ValidationResult<AuthBody> {
-  return validarComSchema(authBodySchema, body);
+export function validarCorpoCadastro(body: unknown): ValidationResult<RegisterBody> {
+  const parsed = validarComSchema(registerBodySchema, body);
+  if (!parsed.ok) {
+    return parsed;
+  }
+
+  return {
+    ok: true,
+    data: {
+      ...parsed.data,
+      playerType: parsed.data.playerType ?? PlayerType.WARRIOR
+    }
+  };
 }
 
 export function validarCorpoLogin(body: unknown): ValidationResult<AuthBody> {

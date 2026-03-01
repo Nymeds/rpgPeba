@@ -12,8 +12,16 @@ export const SPAWN_POSITION = { x: 40, y: 40 };
 
 export enum PlayerType {
   WARRIOR = "WARRIOR",
-  MAGE = "MAGE",
-  ARCHER = "ARCHER"
+  MONK = "MONK"
+}
+
+export function normalizarPlayerType(rawPlayerType: unknown): PlayerType {
+  // Tecnico: Garante fallback seguro para registros antigos/inconsistentes no banco.
+  // Crianca: Se vier classe estranha, vira Warrior para nao quebrar o jogo.
+  if (rawPlayerType === PlayerType.MONK) {
+    return PlayerType.MONK;
+  }
+  return PlayerType.WARRIOR;
 }
 
 // Tecnico: Modelo enxuto enviado para o cliente renderizar cada jogador.
@@ -30,12 +38,15 @@ export type PublicPlayer = {
   playerType: PlayerType;
 };
 
+export type AttackKind = "damage" | "heal";
+
 export type PublicAttack = {
   id: number;
   ownerId: number;
   x: number;
   y: number;
   radius: number;
+  kind: AttackKind;
   expiresAt: number;
 };
 
@@ -49,6 +60,7 @@ type PersonagemParaVisaoPublica = {
   hp: number;
   maxHp: number;
   inventory: string;
+  playerType: PlayerType;
 };
 
 function inventarioVazio(): Array<string | null> {
@@ -113,7 +125,7 @@ export function paraJogadorPublico(character: PersonagemParaVisaoPublica, online
     maxHp: character.maxHp,
     inventory: normalizarInventario(character.inventory),
     online: onlineIds.has(character.id),
-    playerType: PlayerType.WARRIOR
+    playerType: character.playerType
   };
 }
 

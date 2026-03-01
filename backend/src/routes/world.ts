@@ -8,7 +8,7 @@ import { prisma } from "../db.js";
 
 // Tecnico: Constantes e normalizador de inventario.
 // Crianca: Regras do mapa e organizacao da mochila.
-import { MAP_SIZE, paraJogadorPublico } from "../game.js";
+import { MAP_SIZE, normalizarPlayerType, paraJogadorPublico } from "../game.js";
 import { listOnlineCharacterIds } from "../realtime/world.js";
 
 export const rotasMundo: FastifyPluginAsync = async (app) => {
@@ -23,7 +23,12 @@ export const rotasMundo: FastifyPluginAsync = async (app) => {
         y: true,
         hp: true,
         maxHp: true,
-        inventory: true
+        inventory: true,
+        account: {
+          select: {
+            playerType: true
+          }
+        }
       }
     });
     const onlineCharacterIds = listOnlineCharacterIds();
@@ -32,7 +37,19 @@ export const rotasMundo: FastifyPluginAsync = async (app) => {
       mapSize: MAP_SIZE,
       attacks: [],
       players: characters.map((character: (typeof characters)[number]) =>
-        paraJogadorPublico(character, onlineCharacterIds)
+        paraJogadorPublico(
+          {
+            id: character.id,
+            name: character.name,
+            x: character.x,
+            y: character.y,
+            hp: character.hp,
+            maxHp: character.maxHp,
+            inventory: character.inventory,
+            playerType: normalizarPlayerType(character.account.playerType)
+          },
+          onlineCharacterIds
+        )
       )
     });
   });

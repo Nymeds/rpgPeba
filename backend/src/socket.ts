@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { Server as SocketIOServer, type Socket } from "socket.io";
 
 import { prisma } from "./db.js";
-import { MAP_SIZE, PlayerType, normalizarInventario } from "./game.js";
+import { MAP_SIZE, PlayerType, normalizarInventario, normalizarPlayerType } from "./game.js";
 import { logError, logInfo, logWarn } from "./logger.js";
 import { validarPayloadAtaque, validarPayloadMovimento } from "./schemas.js";
 import { appendChatMessage, buildChatHistoryPayload } from "./realtime/chat.js";
@@ -32,6 +32,7 @@ type SocketSession = {
   username: string;
   characterId: number;
   characterName: string;
+  playerType: PlayerType;
   x: number;
   y: number;
   hp: number;
@@ -176,6 +177,7 @@ export function registrarEventosSocket(app: FastifyInstance, io: SocketIOServer)
         select: {
           id: true,
           username: true,
+          playerType: true,
           character: {
             select: {
               id: true,
@@ -204,6 +206,7 @@ export function registrarEventosSocket(app: FastifyInstance, io: SocketIOServer)
         username: account.username,
         characterId: account.character.id,
         characterName: account.character.name,
+        playerType: normalizarPlayerType(account.playerType),
         x: account.character.x,
         y: account.character.y,
         hp: account.character.hp,
@@ -256,7 +259,7 @@ export function registrarEventosSocket(app: FastifyInstance, io: SocketIOServer)
       hp: session.hp,
       maxHp: session.maxHp,
       inventory: session.inventory,
-      playerType: PlayerType.WARRIOR
+      playerType: session.playerType
     });
 
     const sessionReadyPayload: SessionReadyPayload = {
@@ -338,6 +341,7 @@ export function registrarEventosSocket(app: FastifyInstance, io: SocketIOServer)
       logInfo("ATACK", "Ataque criado", {
         player: created.ownerName,
         attackId: created.attackId,
+        kind: created.kind,
         direction: `(${created.directionX.toFixed(2)},${created.directionY.toFixed(2)})`,
         range: created.range,
         attackPos: `(${created.x},${created.y})`,
@@ -382,6 +386,7 @@ export function registrarEventosSocket(app: FastifyInstance, io: SocketIOServer)
         username: removed.username,
         characterId: removed.characterId,
         characterName: removed.name,
+        playerType: removed.playerType,
         x: removed.x,
         y: removed.y,
         hp: removed.hp,

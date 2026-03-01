@@ -1,4 +1,4 @@
-import type { AuthResponse, Character } from "./types";
+import type { AuthResponse, Character, PlayerType } from "./types";
 
 export const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:3000";
 export const WS_URL = import.meta.env.VITE_WS_URL ?? API_URL;
@@ -11,6 +11,10 @@ type ApiErrorPayload = {
 type Credentials = {
   username: string;
   password: string;
+};
+
+type RegisterInput = Credentials & {
+  playerType: PlayerType;
 };
 
 function resolverMensagemErro(payload: ApiErrorPayload | null, fallback: string): string {
@@ -57,7 +61,7 @@ async function requisicaoJson<T>(path: string, init: RequestInit, token?: string
   return payload as T;
 }
 
-export function registrarConta(input: Credentials): Promise<AuthResponse> {
+export function registrarConta(input: RegisterInput): Promise<AuthResponse> {
   return requisicaoJson<AuthResponse>(
     "/api/auth/register",
     {
