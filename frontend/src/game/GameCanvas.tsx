@@ -18,7 +18,7 @@ const PLAYER_INTERPOLATION_RATE = 16;
 const CAMERA_INTERPOLATION_RATE = 12;
 const AIM_VECTOR_SENSITIVITY = 0.025;
 const ATTACK_RANGE_TILES = 1;
-const ATTACK_AIM_GAP_PX = 10;
+const ATTACK_AIM_GAP_PX = 18;
 const WARRIOR_ATTACK_VISUAL_MS = 400;
 const MONK_HEAL_VISUAL_MS = 700;
 
@@ -190,7 +190,7 @@ export default function GameCanvas({ world, selfPlayerId, onMove, onAttack }: Ga
     }
     const centerX = selfSprite.left + selfSprite.size / 2;
     const centerY = selfSprite.top + selfSprite.size / 2;
-    const gap = Math.max(ATTACK_AIM_GAP_PX, selfSprite.size * 0.13);
+    const gap = Math.max(ATTACK_AIM_GAP_PX, selfSprite.size * 0.2);
     const radius = selfSprite.size * 0.58;
     const angle = angleDegFromVector(aimVector.x, aimVector.y);
     const lineStartX = centerX + aimVector.x * gap;
