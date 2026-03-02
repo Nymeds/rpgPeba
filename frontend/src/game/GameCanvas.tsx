@@ -84,6 +84,13 @@ type GameCanvasProps = {
   showGrid?: boolean;
 };
 
+type DrawRect = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
 function clamp(value: number, min: number, max: number): number {
   if (min > max) {
     return value;
@@ -123,6 +130,43 @@ function angleDegFromVector(x: number, y: number): number {
   return (Math.atan2(y, x) * 180) / Math.PI;
 }
 
+function computeAspectPreservingRect(
+  baseX: number,
+  baseY: number,
+  baseWidth: number,
+  baseHeight: number,
+  sourceWidth: number,
+  sourceHeight: number
+): DrawRect {
+  if (sourceWidth <= 0 || sourceHeight <= 0 || baseWidth <= 0 || baseHeight <= 0) {
+    return {
+      x: Math.round(baseX),
+      y: Math.round(baseY),
+      width: Math.max(1, Math.round(baseWidth)),
+      height: Math.max(1, Math.round(baseHeight))
+    };
+  }
+
+  const sourceRatio = sourceWidth / sourceHeight;
+  const baseRatio = baseWidth / baseHeight;
+  let width = baseWidth;
+  let height = baseHeight;
+
+  // Mantem proporcao: ocupa a base em um eixo e deixa "vazar" no outro quando preciso.
+  if (sourceRatio >= baseRatio) {
+    width = baseHeight * sourceRatio;
+  } else {
+    height = baseWidth / sourceRatio;
+  }
+
+  return {
+    x: Math.round(baseX + (baseWidth - width) / 2),
+    y: Math.round(baseY + (baseHeight - height) / 2),
+    width: Math.max(1, Math.round(width)),
+    height: Math.max(1, Math.round(height))
+  };
+}
+
 function escolherSpriteGif(
   sprite: Pick<OverlaySprite, "playerType" | "moving" | "hurt" | "attacking" | "attackPhaseTwo">
 ): string {
@@ -157,6 +201,7 @@ export default function GameCanvas({ world, mapDefinition, selfPlayerId, onMove,
   const onAttackRef = useRef(onAttack);
   const onMoveRef = useRef(onMove);
   const showGridRef = useRef(showGrid);
+  const movementEnabledRef = useRef(false);
   const aimVectorRef = useRef<{ x: number; y: number }>({ x: 1, y: 0 });
   const mapImageCacheRef = useRef<Map<string, HTMLImageElement>>(new Map());
   const attackAnimationByOwnerRef = useRef<
@@ -227,6 +272,9 @@ export default function GameCanvas({ world, mapDefinition, selfPlayerId, onMove,
 
   // Estável para sempre — usa ref internamente
   const stableOnMove = useCallback((input: MoveInput) => {
+    if (!movementEnabledRef.current) {
+      return;
+    }
     onMoveRef.current(input);
   }, []);
 
@@ -245,6 +293,7 @@ export default function GameCanvas({ world, mapDefinition, selfPlayerId, onMove,
 
     const handlePointerLockChange = () => {
       const locked = document.pointerLockElement === shell;
+      movementEnabledRef.current = locked;
       setAimLocked(locked);
       if (!locked) {
         onMoveRef.current({ x: 0, y: 0 });
@@ -252,6 +301,7 @@ export default function GameCanvas({ world, mapDefinition, selfPlayerId, onMove,
     };
 
     const handlePointerLockError = () => {
+      movementEnabledRef.current = false;
       setAimLocked(false);
     };
 
@@ -290,6 +340,18 @@ export default function GameCanvas({ world, mapDefinition, selfPlayerId, onMove,
   }, [emitAimAttack]); // emitAimAttack é estável (useCallback sem deps)
 
   // Canvas render loop — registra UMA VEZ
+  useEffect(() => {
+    const handleWindowBlur = () => {
+      movementEnabledRef.current = false;
+      onMoveRef.current({ x: 0, y: 0 });
+    };
+
+    window.addEventListener("blur", handleWindowBlur);
+    return () => {
+      window.removeEventListener("blur", handleWindowBlur);
+    };
+  }, []);
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) {
@@ -485,6 +547,22 @@ export default function GameCanvas({ world, mapDefinition, selfPlayerId, onMove,
               const drawX = renderOffsetX + x * TILE_SIZE;
               const drawY = renderOffsetY + y * TILE_SIZE;
               const drawSize = TILE_SIZE + tileOverdraw;
+              const sourceWidth =
+                object.cropWidth !== null && object.cropWidth > 0
+                  ? object.cropWidth
+                  : Math.max(1, image.naturalWidth || image.width);
+              const sourceHeight =
+                object.cropHeight !== null && object.cropHeight > 0
+                  ? object.cropHeight
+                  : Math.max(1, image.naturalHeight || image.height);
+              const drawRect = computeAspectPreservingRect(
+                drawX,
+                drawY,
+                drawSize,
+                drawSize,
+                sourceWidth,
+                sourceHeight
+              );
               if (
                 object.cropWidth !== null &&
                 object.cropHeight !== null &&
@@ -497,13 +575,13 @@ export default function GameCanvas({ world, mapDefinition, selfPlayerId, onMove,
                   object.cropY ?? 0,
                   object.cropWidth,
                   object.cropHeight,
-                  drawX,
-                  drawY,
-                  drawSize,
-                  drawSize
+                  drawRect.x,
+                  drawRect.y,
+                  drawRect.width,
+                  drawRect.height
                 );
               } else {
-                context.drawImage(image, drawX, drawY, drawSize, drawSize);
+                context.drawImage(image, drawRect.x, drawRect.y, drawRect.width, drawRect.height);
               }
             }
           }
@@ -643,6 +721,7 @@ export default function GameCanvas({ world, mapDefinition, selfPlayerId, onMove,
     const initialAim = normalizeDirection(event.clientX - centerX, event.clientY - centerY, aimVectorRef.current);
     aimVectorRef.current = initialAim;
     setAimVector(initialAim);
+    movementEnabledRef.current = true;
     void shell.requestPointerLock();
   }, []);
 

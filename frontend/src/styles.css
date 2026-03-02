@@ -34,7 +34,7 @@ body {
 }
 
 .app-shell {
-  width: min(1380px, 96vw);
+  width: min(1640px, 99vw);
   margin: 0 auto;
   padding: 16px 0 20px;
   display: flex;
@@ -237,8 +237,8 @@ input:focus {
 
 .arena-layout {
   display: grid;
-  grid-template-columns: 220px minmax(0, 1fr) 250px;
-  gap: 14px;
+  grid-template-columns: 190px minmax(0, 1fr) 220px;
+  gap: 12px;
   align-items: start;
 }
 
@@ -301,7 +301,7 @@ input:focus {
 
 .center-column {
   display: grid;
-  grid-template-rows: minmax(0, 1fr) 220px;
+  grid-template-rows: minmax(460px, auto) 220px;
   gap: 12px;
 }
 
@@ -423,7 +423,7 @@ input:focus {
 
 .map-shell {
   width: 100%;
-  aspect-ratio: 16 / 12;
+  height: clamp(520px, 72vh, 980px);
   border: 2px solid rgba(239, 67, 93, 0.46);
   border-radius: 13px;
   overflow: hidden;
@@ -863,7 +863,7 @@ input:focus {
 
 @media (max-width: 1180px) {
   .arena-layout {
-    grid-template-columns: 220px minmax(0, 1fr);
+    grid-template-columns: 200px minmax(0, 1fr);
   }
 
   .right-column {
@@ -885,7 +885,7 @@ input:focus {
   }
 
   .center-column {
-    grid-template-rows: minmax(0, 1fr) 250px;
+    grid-template-rows: minmax(360px, auto) 250px;
   }
 
   .right-column {
@@ -893,7 +893,7 @@ input:focus {
   }
 
   .map-shell {
-    aspect-ratio: 4 / 3;
+    height: clamp(360px, 60vh, 760px);
   }
 
   .map-editor-meta {
@@ -914,6 +914,10 @@ input:focus {
 }
 
 @media (max-width: 560px) {
+  .map-shell {
+    height: clamp(300px, 54vh, 560px);
+  }
+
   .class-picker-grid {
     grid-template-columns: 1fr;
   }
