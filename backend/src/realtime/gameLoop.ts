@@ -9,6 +9,7 @@ import {
   applyMovement,
   applyRespawns,
   buildPublicAttacksSnapshot,
+  buildEnemyAwarePlayersSnapshot,
   buildPublicPlayersSnapshot,
   getLastAttackerOfEnemy
 } from "./world.js";
@@ -73,11 +74,11 @@ export function startGameLoop(io: SocketIOServer): () => void {
     const respawns = applyRespawns(now);
 
     // Lógica de inimigos
-    const playerPositions = buildPublicPlayersSnapshot().map((p) => ({
-      characterId: p.id,
+    const playerPositions = buildEnemyAwarePlayersSnapshot(now).map((p) => ({
+      characterId: p.characterId,
       x: p.x,
       y: p.y,
-      spawnedAtTime: now
+      isSpawnProtected: p.isSpawnProtected
     }));
     
     const attackedByPlayerId = (enemyId: number): number | null => {

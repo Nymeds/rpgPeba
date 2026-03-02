@@ -24,6 +24,7 @@ const MONK_HEAL_EFFECT_DURATION_MS = 1100;
 const WARRIOR_ATTACK_COOLDOWN_MS = 400;
 const MONK_HEAL_COOLDOWN_MS = 1100;
 const RESPAWN_DELAY_MS = 3000;
+const RESPAWN_PROTECTION_MS = 2000;
 
 export type InputVector = {
   x: number;
@@ -46,6 +47,7 @@ export type OnlinePlayerState = {
   inputY: number;
   facing: Direction;
   deadUntilMs: number | null;
+  spawnedAtMs: number;
   lastAttackAtMs: number;
   dirtyState: boolean;
 };
@@ -96,6 +98,14 @@ export type RespawnResult = {
   y: number;
 };
 
+export type EnemyAwarePlayer = {
+  characterId: number;
+  name: string;
+  x: number;
+  y: number;
+  isSpawnProtected: boolean;
+};
+
 export type AttackCreateOutcome =
   | { ok: true; attack: AttackCreationResult }
   | { ok: false; error: string };
@@ -115,7 +125,7 @@ type ActiveAttackState = {
 
 type RegisterOnlinePlayerInput = Omit<
   OnlinePlayerState,
-  "inputX" | "inputY" | "facing" | "deadUntilMs" | "lastAttackAtMs" | "dirtyState"
+  "inputX" | "inputY" | "facing" | "deadUntilMs" | "spawnedAtMs" | "lastAttackAtMs" | "dirtyState"
 >;
 
 const onlinePlayersBySocket = new Map<string, OnlinePlayerState>();
@@ -208,6 +218,7 @@ function attackCooldownMs(kind: AttackKind): number {
 }
 
 export function registerOnlinePlayer(input: RegisterOnlinePlayerInput): string | null {
+  const nowMs = Date.now();
   const previousSocketId = socketByCharacterId.get(input.characterId) ?? null;
 
   if (previousSocketId && previousSocketId !== input.socketId) {
@@ -226,6 +237,7 @@ export function registerOnlinePlayer(input: RegisterOnlinePlayerInput): string |
     inputY: 0,
     facing: "down",
     deadUntilMs: null,
+    spawnedAtMs: nowMs,
     lastAttackAtMs: 0,
     dirtyState: input.hp <= 0
   });
@@ -522,6 +534,7 @@ export function applyRespawns(nowMs = Date.now()): RespawnResult[] {
     }
 
     player.deadUntilMs = null;
+    player.spawnedAtMs = nowMs;
     player.hp = player.maxHp;
     player.x = SPAWN_POSITION.x;
     player.y = SPAWN_POSITION.y;
@@ -616,7 +629,21 @@ export function buildPublicPlayersSnapshot(): PublicPlayer[] {
 }
 
 // Função para aplicar dano a um player (chamada por inimigos)
+export function buildEnemyAwarePlayersSnapshot(nowMs = Date.now()): EnemyAwarePlayer[] {
+  return [...onlinePlayersBySocket.values()]
+    .filter((player) => player.deadUntilMs === null && player.hp > 0)
+    .map((player) => ({
+      characterId: player.characterId,
+      name: player.name,
+      x: player.x,
+      y: player.y,
+      isSpawnProtected: nowMs - player.spawnedAtMs < RESPAWN_PROTECTION_MS
+    }))
+    .sort((a, b) => a.characterId - b.characterId);
+}
+
 export function damagePlayer(characterId: number, damage: number): { damageTaken: number; newHp: number; died: boolean } | null {
+  const nowMs = Date.now();
   for (const player of onlinePlayersBySocket.values()) {
     if (player.characterId === characterId) {
       if (player.deadUntilMs !== null || player.hp <= 0) {
@@ -625,6 +652,11 @@ export function damagePlayer(characterId: number, damage: number): { damageTaken
       const damageTaken = Math.min(damage, player.hp);
       player.hp = Math.max(0, player.hp - damage);
       const died = player.hp === 0;
+      if (died) {
+        player.deadUntilMs = nowMs + RESPAWN_DELAY_MS;
+        player.inputX = 0;
+        player.inputY = 0;
+      }
       player.dirtyState = true;
       return { damageTaken, newHp: player.hp, died };
     }

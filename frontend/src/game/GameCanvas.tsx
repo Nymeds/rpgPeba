@@ -10,6 +10,7 @@ import warriorAttack2Gif from "../../images/Warrior/attack2.gif";
 import warriorHurtGif from "../../images/Warrior/hurt.gif";
 import warriorIdleGif from "../../images/Warrior/idle.gif";
 import warriorRunGif from "../../images/Warrior/run.gif";
+import { API_URL } from "../api";
 import { setupInput } from "./input";
 import { PlayerType, type EnemyType, type GameMapDefinition, type MoveInput, type WorldUpdatePayload } from "../types";
 
@@ -18,7 +19,7 @@ const PLAYER_INTERPOLATION_RATE = 16;
 const CAMERA_INTERPOLATION_RATE = 12;
 const AIM_VECTOR_SENSITIVITY = 0.025;
 const ATTACK_RANGE_TILES = 1;
-const ATTACK_AIM_GAP_PX = 18;
+const ATTACK_AIM_GAP_PX = 50;
 const WARRIOR_ATTACK_VISUAL_MS = 400;
 const MONK_HEAL_VISUAL_MS = 1100;
 const MAP_TILE_OVERDRAW_PX = 1;
@@ -57,6 +58,7 @@ type RenderEnemy = {
   enemyType: EnemyType;
   facing: "left" | "right";
   moving: boolean;
+  hurtUntilMs: number;
   attacking: boolean;
 };
 
@@ -88,6 +90,7 @@ type OverlayEnemy = {
   enemyType: EnemyType;
   facing: "left" | "right";
   moving: boolean;
+  hurt: boolean;
   attacking: boolean;
 };
 
@@ -196,6 +199,19 @@ function computeAspectPreservingRect(
   };
 }
 
+function resolveMapImageUrl(source: string): string {
+  if (!source) {
+    return source;
+  }
+  if (source.startsWith("data:") || source.startsWith("http://") || source.startsWith("https://")) {
+    return source;
+  }
+  if (source.startsWith("/")) {
+    return `${API_URL}${source}`;
+  }
+  return `${API_URL}/${source}`;
+}
+
 function escolherSpriteGif(
   sprite: Pick<OverlaySprite, "playerType" | "moving" | "hurt" | "attacking" | "attackPhaseTwo">
 ): string {
@@ -218,10 +234,13 @@ function escolherSpriteGif(
   return sprite.playerType === PlayerType.MONK ? monkIdleGif : warriorIdleGif;
 }
 
-function escolherGifInimigo(enemy: Pick<OverlayEnemy, "enemyType" | "moving" | "attacking">): string {
+function escolherGifInimigo(enemy: Pick<OverlayEnemy, "enemyType" | "moving" | "hurt" | "attacking">): string {
   // Por enquanto, inimigos usam sempre os GIFs do Warrior
   if (enemy.attacking) {
     return warriorAttack1Gif;
+  }
+  if (enemy.hurt) {
+    return warriorHurtGif;
   }
   if (enemy.moving) {
     return warriorRunGif;
@@ -534,9 +553,13 @@ export default function GameCanvas({ world, mapDefinition, selfPlayerId, onMove,
             enemyType: enemy.enemyType,
             facing: "right",
             moving: false,
+            hurtUntilMs: 0,
             attacking: enemy.isAttacking
           });
           continue;
+        }
+        if (enemy.hp < existing.hp) {
+          existing.hurtUntilMs = nowMs + 260;
         }
         existing.name = enemy.name;
         existing.hp = enemy.hp;
@@ -636,7 +659,7 @@ export default function GameCanvas({ world, mapDefinition, selfPlayerId, onMove,
               let image = mapImageCacheRef.current.get(object.id);
               if (!image) {
                 image = new Image();
-                image.src = object.imageDataUrl;
+                image.src = resolveMapImageUrl(object.imageDataUrl);
                 mapImageCacheRef.current.set(object.id, image);
               }
               if (!image.complete) {
@@ -745,7 +768,9 @@ export default function GameCanvas({ world, mapDefinition, selfPlayerId, onMove,
 
       const attackAnimations = attackAnimationByOwnerRef.current;
       const nextAttackPhaseTwoByOwner = nextAttackPhaseTwoByOwnerRef.current;
+      const activeAttackByOwnerId = new Map<number, (typeof currentWorld.attacks)[number]>();
       for (const attack of currentWorld.attacks) {
+        activeAttackByOwnerId.set(attack.ownerId, attack);
         const existing = attackAnimations.get(attack.ownerId);
         // Cada attackId deve disparar a animacao visual apenas uma vez.
         // Mesmo que o ataque continue ativo no snapshot do servidor, nao reiniciamos o GIF.
@@ -775,6 +800,15 @@ export default function GameCanvas({ world, mapDefinition, selfPlayerId, onMove,
         const attackAnimation = attackAnimations.get(player.id) ?? null;
         const attacking = Boolean(attackAnimation && attackAnimation.endsAtMs > wallNowMs);
         const attackPhaseTwo = attacking ? (attackAnimation?.phaseTwo ?? false) : false;
+        const activeAttack = activeAttackByOwnerId.get(player.id);
+        if (activeAttack) {
+          const attackDx = activeAttack.x - player.x;
+          if (attackDx < -0.02) {
+            player.facing = "left";
+          } else if (attackDx > 0.02) {
+            player.facing = "right";
+          }
+        }
         sprites.push({
           id: player.id,
           name: player.name,
@@ -814,6 +848,7 @@ export default function GameCanvas({ world, mapDefinition, selfPlayerId, onMove,
           enemyType: enemy.enemyType,
           facing: enemy.facing,
           moving: enemy.moving,
+          hurt: nowMs <= enemy.hurtUntilMs,
           attacking: enemy.attacking
         });
       }

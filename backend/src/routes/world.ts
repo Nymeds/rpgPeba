@@ -25,6 +25,21 @@ import { listOnlineCharacterIds } from "../realtime/world.js";
 import { validarCorpoSalvarMapa } from "../schemas.js";
 import fs from "fs";
 import path from "path";  // used for image uploads
+
+function contentTypeFromFilename(filename: string): string {
+  const lower = filename.toLowerCase();
+  if (lower.endsWith(".png")) return "image/png";
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+  if (lower.endsWith(".webp")) return "image/webp";
+  if (lower.endsWith(".gif")) return "image/gif";
+  if (lower.endsWith(".svg")) return "image/svg+xml";
+  return "application/octet-stream";
+}
+
+function projectRootDir(): string {
+  const cwd = process.cwd();
+  return path.basename(cwd).toLowerCase() === "backend" ? path.resolve(cwd, "..") : cwd;
+}
 type MapRecord = {
   id: number;
   mapKey: string;
@@ -204,8 +219,24 @@ export const rotasMundo: FastifyPluginAsync = async (app) => {
     }
   );
 
+  app.get("/images/world/*", async (request, reply) => {
+    const wildcard = (request.params as { "*": string })["*"] ?? "";
+    const normalized = path.normalize(wildcard).replace(/^(\.\.[/\\])+/, "");
+    if (!normalized || normalized.includes("..")) {
+      return reply.status(400).send({ error: "Caminho de arquivo invalido." });
+    }
+    const worldDir = path.join(projectRootDir(), "frontend", "images", "world");
+    const filePath = path.join(worldDir, normalized);
+    if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+      return reply.status(404).send({ error: "Imagem nao encontrada." });
+    }
+    const buffer = fs.readFileSync(filePath);
+    reply.header("content-type", contentTypeFromFilename(filePath));
+    return reply.send(buffer);
+  });
+
   // Endpoint para upload de imagem de objeto/mapa. Recebe { name, dataUrl }
-  // escreve o arquivo em frontend/images/map e retorna a URL para uso no cliente.
+  // escreve o arquivo em frontend/images/world e retorna a URL para uso no cliente.
   app.post(
     "/api/map/image",
     async (request, reply) => {
@@ -226,12 +257,14 @@ export const rotasMundo: FastifyPluginAsync = async (app) => {
         const mime = match[1];
         const base64 = match[2];
         const safeName = name.replace(/[^a-zA-Z0-9._-]/g, "_");
-        const filename = `${Date.now()}-${safeName}`;
-        const dir = path.join(process.cwd(), "frontend", "images", "map");
+        const ext = path.extname(safeName) || ".png";
+        const base = path.basename(safeName, ext) || "asset";
+        const filename = `${Date.now()}-${base}${ext}`;
+        const dir = path.join(projectRootDir(), "frontend", "images", "world");
         fs.mkdirSync(dir, { recursive: true });
         const filepath = path.join(dir, filename);
         fs.writeFileSync(filepath, Buffer.from(base64, "base64"));
-        const url = `/images/map/${filename}`;
+        const url = `/images/world/${filename}`;
         return reply.send({ url });
       } catch (error) {
         console.error(error);

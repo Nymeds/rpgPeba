@@ -1,9 +1,12 @@
 import { type ChangeEvent, type MouseEvent, useEffect, useMemo, useRef, useState } from "react";
 
+import { API_URL } from "../api";
 import type { GameMapDefinition, MapLayerDefinition, MapObjectDefinition, EnemySpawnDefinition } from "../types";
 
 const EDITOR_TILE_SIZE = 22;
 const CROP_EDITOR_CANVAS_SIZE = 460;
+const MAP_ZOOM_MIN = 0.4;
+const MAP_ZOOM_MAX = 3;
 
 type MapEditorProps = {
   map: GameMapDefinition;
@@ -97,16 +100,33 @@ function alignCropRectToGrid(rect: CropRect, cellSize: number, imageWidth: numbe
 }
 
 function gerarDataUrlRecorte(image: HTMLImageElement, rect: CropRect): string | null {
-  const canvas = document.createElement("canvas");
-  canvas.width = Math.max(1, Math.round(rect.width));
-  canvas.height = Math.max(1, Math.round(rect.height));
-  const context = canvas.getContext("2d");
-  if (!context) {
+  try {
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(rect.width));
+    canvas.height = Math.max(1, Math.round(rect.height));
+    const context = canvas.getContext("2d");
+    if (!context) {
+      return null;
+    }
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(image, rect.x, rect.y, rect.width, rect.height, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL("image/png");
+  } catch {
     return null;
   }
-  context.clearRect(0, 0, canvas.width, canvas.height);
-  context.drawImage(image, rect.x, rect.y, rect.width, rect.height, 0, 0, canvas.width, canvas.height);
-  return canvas.toDataURL("image/png");
+}
+
+function resolveMapImageUrl(source: string): string {
+  if (!source) {
+    return source;
+  }
+  if (source.startsWith("data:") || source.startsWith("http://") || source.startsWith("https://")) {
+    return source;
+  }
+  if (source.startsWith("/")) {
+    return `${API_URL}${source}`;
+  }
+  return `${API_URL}/${source}`;
 }
 
 export default function MapEditor({ map, onSave, onClose }: MapEditorProps) {
@@ -120,6 +140,8 @@ export default function MapEditor({ map, onSave, onClose }: MapEditorProps) {
   const cropViewportRef = useRef<CropViewport | null>(null);
   const cropDraggingRef = useRef(false);
   const cropDragStartRef = useRef<{ x: number; y: number } | null>(null);
+  const panningRef = useRef(false);
+  const panStartRef = useRef<{ startX: number; startY: number; originPanX: number; originPanY: number } | null>(null);
 
   const [draft, setDraft] = useState<GameMapDefinition>(() => cloneMap(map));
   const [activeLayerId, setActiveLayerId] = useState<string>(map.layers[0]?.id ?? "");
@@ -154,6 +176,8 @@ export default function MapEditor({ map, onSave, onClose }: MapEditorProps) {
   const [mapZoom, setMapZoom] = useState(1);
   const [mapPanX, setMapPanX] = useState(0);
   const [mapPanY, setMapPanY] = useState(0);
+  const [isPanning, setIsPanning] = useState(false);
+  const [canvasViewportSize, setCanvasViewportSize] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
 
   useEffect(() => {
     setDraft(cloneMap(map));
@@ -168,6 +192,12 @@ export default function MapEditor({ map, onSave, onClose }: MapEditorProps) {
     setCropNewObjectMaskWidth(1);
     setCropNewObjectMaskHeight(1);
     setCropNewObjectSolid(false);
+    setMapZoom(1);
+    setMapPanX(0);
+    setMapPanY(0);
+    setIsPanning(false);
+    panningRef.current = false;
+    panStartRef.current = null;
     setStatus("");
   }, [map]);
 
@@ -208,6 +238,59 @@ export default function MapEditor({ map, onSave, onClose }: MapEditorProps) {
     () => draft.objects.find((entry) => entry.id === cropEditorObjectId) ?? null,
     [cropEditorObjectId, draft.objects]
   );
+
+  function clampPanForZoom(nextZoom: number, nextPanX: number, nextPanY: number): { x: number; y: number } {
+    const canvas = canvasRef.current;
+    if (!canvas) {
+      return { x: nextPanX, y: nextPanY };
+    }
+    const baseMapPixels = draft.mapSize * EDITOR_TILE_SIZE;
+    const visibleWidth = Math.max(1, canvas.width || Math.floor(canvas.clientWidth));
+    const visibleHeight = Math.max(1, canvas.height || Math.floor(canvas.clientHeight));
+    const worldWidth = baseMapPixels * nextZoom;
+    const worldHeight = baseMapPixels * nextZoom;
+
+    let minX = visibleWidth - worldWidth;
+    let maxX = 0;
+    let minY = visibleHeight - worldHeight;
+    let maxY = 0;
+
+    if (worldWidth <= visibleWidth) {
+      const centeredX = (visibleWidth - worldWidth) / 2;
+      minX = centeredX;
+      maxX = centeredX;
+    }
+    if (worldHeight <= visibleHeight) {
+      const centeredY = (visibleHeight - worldHeight) / 2;
+      minY = centeredY;
+      maxY = centeredY;
+    }
+
+    return {
+      x: clamp(nextPanX, minX, maxX),
+      y: clamp(nextPanY, minY, maxY)
+    };
+  }
+
+  function applyClampedView(nextZoom: number, nextPanX: number, nextPanY: number): void {
+    const clamped = clampPanForZoom(nextZoom, nextPanX, nextPanY);
+    setMapZoom(nextZoom);
+    setMapPanX(clamped.x);
+    setMapPanY(clamped.y);
+  }
+
+  function zoomAroundViewportCenter(nextZoom: number): void {
+    const canvas = canvasRef.current;
+    if (!canvas) {
+      applyClampedView(nextZoom, mapPanX, mapPanY);
+      return;
+    }
+    const centerX = canvas.width / 2;
+    const centerY = canvas.height / 2;
+    const worldX = (centerX - mapPanX) / mapZoom;
+    const worldY = (centerY - mapPanY) / mapZoom;
+    applyClampedView(nextZoom, centerX - worldX * nextZoom, centerY - worldY * nextZoom);
+  }
 
   function updateObjectById(objectId: string, mutator: (object: MapObjectDefinition) => void): void {
     setDraft((current) => {
@@ -346,7 +429,7 @@ export default function MapEditor({ map, onSave, onClose }: MapEditorProps) {
     }
   }
 
-  function salvarRecorteNoObjetoAtual(): void {
+  async function salvarRecorteNoObjetoAtual(): Promise<void> {
     if (!cropEditorObject) {
       return;
     }
@@ -357,25 +440,29 @@ export default function MapEditor({ map, onSave, onClose }: MapEditorProps) {
     const nextCrop = obterRecorteAtual(image);
     const dataUrl = gerarDataUrlRecorte(image, nextCrop);
     if (!dataUrl) {
-      setStatus("Falha ao gerar imagem recortada.");
+      setStatus("Falha ao gerar imagem recortada. Verifique se a imagem foi carregada do servidor com CORS.");
       return;
     }
 
-    const objectName = cropEditorObject.name;
-    updateObjectById(cropEditorObject.id, (object) => {
-      object.imageDataUrl = dataUrl;
-      object.cropX = null;
-      object.cropY = null;
-      object.cropWidth = null;
-      object.cropHeight = null;
-    });
-    imageCacheRef.current.delete(cropEditorObject.id);
-
-    setStatus(`Imagem de "${objectName}" sobrescrita com o recorte.`);
-    fecharEditorRecorte();
+    try {
+      const url = await uploadMapImage(`${cropEditorObject.name}-crop.png`, dataUrl);
+      const objectName = cropEditorObject.name;
+      updateObjectById(cropEditorObject.id, (object) => {
+        object.imageDataUrl = url;
+        object.cropX = null;
+        object.cropY = null;
+        object.cropWidth = null;
+        object.cropHeight = null;
+      });
+      imageCacheRef.current.delete(cropEditorObject.id);
+      setStatus(`Imagem de "${objectName}" sobrescrita com o recorte.`);
+      fecharEditorRecorte();
+    } catch {
+      setStatus("Falha ao salvar recorte no servidor.");
+    }
   }
 
-  function salvarRecorteComoNovoObjeto(): void {
+  async function salvarRecorteComoNovoObjeto(): Promise<void> {
     if (!cropEditorObject) {
       return;
     }
@@ -393,30 +480,35 @@ export default function MapEditor({ map, onSave, onClose }: MapEditorProps) {
     const nextCrop = obterRecorteAtual(image);
     const dataUrl = gerarDataUrlRecorte(image, nextCrop);
     if (!dataUrl) {
-      setStatus("Falha ao gerar imagem recortada.");
+      setStatus("Falha ao gerar imagem recortada. Verifique se a imagem foi carregada do servidor com CORS.");
       return;
     }
 
-    const object: MapObjectDefinition = {
-      id: criarId("obj"),
-      name,
-      imageDataUrl: dataUrl,
-      maskWidth: Math.max(1, Math.min(8, Math.round(cropNewObjectMaskWidth || 1))),
-      maskHeight: Math.max(1, Math.min(8, Math.round(cropNewObjectMaskHeight || 1))),
-      solid: cropNewObjectSolid,
-      cropX: null,
-      cropY: null,
-      cropWidth: null,
-      cropHeight: null
-    };
+    try {
+      const imageUrl = await uploadMapImage(`${name}.png`, dataUrl);
+      const object: MapObjectDefinition = {
+        id: criarId("obj"),
+        name,
+        imageDataUrl: imageUrl,
+        maskWidth: Math.max(1, Math.min(8, Math.round(cropNewObjectMaskWidth || 1))),
+        maskHeight: Math.max(1, Math.min(8, Math.round(cropNewObjectMaskHeight || 1))),
+        solid: cropNewObjectSolid,
+        cropX: null,
+        cropY: null,
+        cropWidth: null,
+        cropHeight: null
+      };
 
-    setDraft((current) => ({
-      ...current,
-      objects: [...current.objects, object]
-    }));
-    setActiveObjectId(object.id);
-    setStatus(`Novo objeto "${object.name}" criado a partir do recorte.`);
-    fecharEditorRecorte();
+      setDraft((current) => ({
+        ...current,
+        objects: [...current.objects, object]
+      }));
+      setActiveObjectId(object.id);
+      setStatus(`Novo objeto "${object.name}" criado a partir do recorte.`);
+      fecharEditorRecorte();
+    } catch {
+      setStatus("Falha ao salvar novo objeto recortado no servidor.");
+    }
   }
 
   function paintAt(tileX: number, tileY: number, erase: boolean): void {
@@ -491,9 +583,11 @@ export default function MapEditor({ map, onSave, onClose }: MapEditorProps) {
       return null;
     }
     // offsetX/offsetY são relativos ao elemento, considerando scroll
-    const nativeEvent = event.nativeEvent as unknown as { offsetX: number; offsetY: number };
-    const canvasX = nativeEvent.offsetX;
-    const canvasY = nativeEvent.offsetY;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / Math.max(1, rect.width);
+    const scaleY = canvas.height / Math.max(1, rect.height);
+    const canvasX = (event.clientX - rect.left) * scaleX;
+    const canvasY = (event.clientY - rect.top) * scaleY;
     
     // Aplicar transformação inversa de zoom e pan
     const worldX = (canvasX - mapPanX) / mapZoom;
@@ -508,7 +602,19 @@ export default function MapEditor({ map, onSave, onClose }: MapEditorProps) {
   }
 
   function handleMouseDown(event: MouseEvent<HTMLCanvasElement>): void {
-    if (event.button !== 0 && event.button !== 2) {
+    if (event.button === 2) {
+      event.preventDefault();
+      panningRef.current = true;
+      setIsPanning(true);
+      panStartRef.current = {
+        startX: event.clientX,
+        startY: event.clientY,
+        originPanX: mapPanX,
+        originPanY: mapPanY
+      };
+      return;
+    }
+    if (event.button !== 0) {
       return;
     }
     const tile = obterTileDoMouse(event);
@@ -518,8 +624,8 @@ export default function MapEditor({ map, onSave, onClose }: MapEditorProps) {
 
     // se estivermos na aba de inimigos, tratamos o clique como posicionamento/remoção de spawn
     if (editorTab === "enemies") {
-      if (event.button === 2) {
-        // botao direito remove spawn na posicao, se existir
+      if (event.altKey) {
+        // Alt+clique remove spawn na posicao, se existir
         setDraft((current) => {
           if (!current.enemySpawns) return current;
           const nextSpawns = current.enemySpawns.filter((s) => !(s.x === tile.x && s.y === tile.y));
@@ -556,7 +662,7 @@ export default function MapEditor({ map, onSave, onClose }: MapEditorProps) {
     }
 
     // comportamento padrão de pintura
-    const erase = event.button === 2;
+    const erase = event.altKey;
     drawingRef.current = true;
     drawingEraseRef.current = erase;
     lastTileRef.current = `${tile.x}:${tile.y}:${erase ? "erase" : "paint"}`;
@@ -564,6 +670,14 @@ export default function MapEditor({ map, onSave, onClose }: MapEditorProps) {
   }
 
   function handleMouseMove(event: MouseEvent<HTMLCanvasElement>): void {
+    if (panningRef.current && panStartRef.current) {
+      const deltaX = event.clientX - panStartRef.current.startX;
+      const deltaY = event.clientY - panStartRef.current.startY;
+      const nextPan = clampPanForZoom(mapZoom, panStartRef.current.originPanX + deltaX, panStartRef.current.originPanY + deltaY);
+      setMapPanX(nextPan.x);
+      setMapPanY(nextPan.y);
+      return;
+    }
     // arrastar a partir de clique já registrado
     if (!drawingRef.current) {
       return;
@@ -597,6 +711,29 @@ export default function MapEditor({ map, onSave, onClose }: MapEditorProps) {
     drawingRef.current = false;
     drawingEraseRef.current = false;
     lastTileRef.current = null;
+    panningRef.current = false;
+    panStartRef.current = null;
+    setIsPanning(false);
+  }
+
+  function handleCanvasWheel(event: WheelEvent): void {
+    const canvas = canvasRef.current;
+    if (!canvas) {
+      return;
+    }
+    event.preventDefault();
+
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / Math.max(1, rect.width);
+    const scaleY = canvas.height / Math.max(1, rect.height);
+    const canvasX = (event.clientX - rect.left) * scaleX;
+    const canvasY = (event.clientY - rect.top) * scaleY;
+
+    const worldX = (canvasX - mapPanX) / mapZoom;
+    const worldY = (canvasY - mapPanY) / mapZoom;
+    const zoomFactor = event.deltaY < 0 ? 1.12 : 0.88;
+    const nextZoom = clamp(Number((mapZoom * zoomFactor).toFixed(4)), MAP_ZOOM_MIN, MAP_ZOOM_MAX);
+    applyClampedView(nextZoom, canvasX - worldX * nextZoom, canvasY - worldY * nextZoom);
   }
 
   useEffect(() => {
@@ -606,12 +743,117 @@ export default function MapEditor({ map, onSave, onClose }: MapEditorProps) {
       lastTileRef.current = null;
       cropDraggingRef.current = false;
       cropDragStartRef.current = null;
+      panningRef.current = false;
+      panStartRef.current = null;
+      setIsPanning(false);
     };
     window.addEventListener("mouseup", handleUp);
+    window.addEventListener("blur", handleUp);
     return () => {
       window.removeEventListener("mouseup", handleUp);
+      window.removeEventListener("blur", handleUp);
     };
   }, []);
+
+  useEffect(() => {
+    const isTypingTarget = (target: EventTarget | null): boolean => {
+      if (!(target instanceof HTMLElement)) {
+        return false;
+      }
+      const tagName = target.tagName.toUpperCase();
+      return tagName === "INPUT" || tagName === "TEXTAREA" || tagName === "SELECT" || target.isContentEditable;
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (isTypingTarget(event.target)) {
+        return;
+      }
+
+      const panStep = event.shiftKey ? 120 : 60;
+      let nextZoom = mapZoom;
+      let nextPanX = mapPanX;
+      let nextPanY = mapPanY;
+      let handled = true;
+
+      switch (event.code) {
+        case "ArrowLeft":
+        case "KeyA":
+          nextPanX += panStep;
+          break;
+        case "ArrowRight":
+        case "KeyD":
+          nextPanX -= panStep;
+          break;
+        case "ArrowUp":
+        case "KeyW":
+          nextPanY += panStep;
+          break;
+        case "ArrowDown":
+        case "KeyS":
+          nextPanY -= panStep;
+          break;
+        case "Equal":
+        case "NumpadAdd":
+          nextZoom = clamp(mapZoom * 1.12, MAP_ZOOM_MIN, MAP_ZOOM_MAX);
+          break;
+        case "Minus":
+        case "NumpadSubtract":
+          nextZoom = clamp(mapZoom * 0.88, MAP_ZOOM_MIN, MAP_ZOOM_MAX);
+          break;
+        default:
+          handled = false;
+      }
+
+      if (!handled) {
+        return;
+      }
+      event.preventDefault();
+
+      applyClampedView(nextZoom, nextPanX, nextPanY);
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [mapPanX, mapPanY, mapZoom, draft.mapSize]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) {
+      return;
+    }
+    const syncViewport = () => {
+      const width = Math.max(1, Math.floor(canvas.clientWidth));
+      const height = Math.max(1, Math.floor(canvas.clientHeight));
+      setCanvasViewportSize((current) => {
+        if (current.width === width && current.height === height) {
+          return current;
+        }
+        return { width, height };
+      });
+    };
+    syncViewport();
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", syncViewport);
+      return () => {
+        window.removeEventListener("resize", syncViewport);
+      };
+    }
+    const observer = new ResizeObserver(syncViewport);
+    observer.observe(canvas);
+    return () => {
+      observer.disconnect();
+    };
+  }, []);
+
+  useEffect(() => {
+    const clamped = clampPanForZoom(mapZoom, mapPanX, mapPanY);
+    if (Math.abs(clamped.x - mapPanX) > 0.1 || Math.abs(clamped.y - mapPanY) > 0.1) {
+      setMapPanX(clamped.x);
+      setMapPanY(clamped.y);
+    }
+  }, [draft.mapSize, mapPanX, mapPanY, mapZoom, canvasViewportSize.width, canvasViewportSize.height]);
 
   useEffect(() => {
     if (!cropEditorObject) {
@@ -622,6 +864,7 @@ export default function MapEditor({ map, onSave, onClose }: MapEditorProps) {
 
     let cancelled = false;
     const image = new Image();
+    image.crossOrigin = "anonymous";
     image.onload = () => {
       if (cancelled) {
         return;
@@ -654,7 +897,7 @@ export default function MapEditor({ map, onSave, onClose }: MapEditorProps) {
         setStatus("Falha ao abrir imagem no editor de recorte.");
       }
     };
-    image.src = cropEditorObject.imageDataUrl;
+    image.src = resolveMapImageUrl(cropEditorObject.imageDataUrl);
 
     return () => {
       cancelled = true;
@@ -756,8 +999,15 @@ export default function MapEditor({ map, onSave, onClose }: MapEditorProps) {
       return;
     }
 
-    canvas.width = draft.mapSize * EDITOR_TILE_SIZE;
-    canvas.height = draft.mapSize * EDITOR_TILE_SIZE;
+    const viewportWidth = Math.max(1, canvasViewportSize.width || Math.floor(canvas.clientWidth));
+    const viewportHeight = Math.max(1, canvasViewportSize.height || Math.floor(canvas.clientHeight));
+    if (canvas.width !== viewportWidth) {
+      canvas.width = viewportWidth;
+    }
+    if (canvas.height !== viewportHeight) {
+      canvas.height = viewportHeight;
+    }
+    const mapPixels = draft.mapSize * EDITOR_TILE_SIZE;
     context.clearRect(0, 0, canvas.width, canvas.height);
     context.fillStyle = "#0f1721";
     context.fillRect(0, 0, canvas.width, canvas.height);
@@ -787,7 +1037,8 @@ export default function MapEditor({ map, onSave, onClose }: MapEditorProps) {
           let image = imageCacheRef.current.get(object.id);
           if (!image) {
             image = new Image();
-            image.src = object.imageDataUrl;
+            image.crossOrigin = "anonymous";
+            image.src = resolveMapImageUrl(object.imageDataUrl);
             imageCacheRef.current.set(object.id, image);
           }
 
@@ -827,13 +1078,13 @@ export default function MapEditor({ map, onSave, onClose }: MapEditorProps) {
     for (let x = 0; x <= draft.mapSize; x += 1) {
       context.beginPath();
       context.moveTo(x * EDITOR_TILE_SIZE, 0);
-      context.lineTo(x * EDITOR_TILE_SIZE, canvas.height);
+      context.lineTo(x * EDITOR_TILE_SIZE, mapPixels);
       context.stroke();
     }
     for (let y = 0; y <= draft.mapSize; y += 1) {
       context.beginPath();
       context.moveTo(0, y * EDITOR_TILE_SIZE);
-      context.lineTo(canvas.width, y * EDITOR_TILE_SIZE);
+      context.lineTo(mapPixels, y * EDITOR_TILE_SIZE);
       context.stroke();
     }
 
@@ -874,7 +1125,7 @@ export default function MapEditor({ map, onSave, onClose }: MapEditorProps) {
     context.fill();
 
     context.restore();
-  }, [draft, mapZoom, mapPanX, mapPanY, activeEnemySpawnId]);
+  }, [draft, mapZoom, mapPanX, mapPanY, activeEnemySpawnId, canvasViewportSize.width, canvasViewportSize.height]);
 
   function addLayer(): void {
     const id = criarId("layer");
@@ -945,6 +1196,22 @@ export default function MapEditor({ map, onSave, onClose }: MapEditorProps) {
     setStatus(`Objeto "${object.name}" adicionado.`);
   }
 
+  async function uploadMapImage(name: string, dataUrl: string): Promise<string> {
+    const resp = await fetch(`${API_URL}/api/map/image`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name, dataUrl })
+    });
+    if (!resp.ok) {
+      throw new Error("upload falhou");
+    }
+    const json = (await resp.json()) as { url: string };
+    if (!json.url) {
+      throw new Error("resposta de upload invalida");
+    }
+    return json.url;
+  }
+
   async function onSelectObjectImage(event: ChangeEvent<HTMLInputElement>): Promise<void> {
     const file = event.target.files?.[0];
     if (!file) {
@@ -952,17 +1219,8 @@ export default function MapEditor({ map, onSave, onClose }: MapEditorProps) {
     }
     try {
       const dataUrl = await lerArquivoImagem(file);
-      // enviar para servidor para ser salvo em pasta de assets
-      const resp = await fetch("/api/map/image", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: file.name, dataUrl })
-      });
-      if (!resp.ok) {
-        throw new Error("upload falhou");
-      }
-      const json = await resp.json();
-      setNewObjectImageDataUrl(json.url);
+      const url = await uploadMapImage(file.name, dataUrl);
+      setNewObjectImageDataUrl(url);
       setStatus(`Imagem carregada: ${file.name}`);
     } catch (error) {
       console.error(error);
@@ -977,17 +1235,9 @@ export default function MapEditor({ map, onSave, onClose }: MapEditorProps) {
     }
     try {
       const dataUrl = await lerArquivoImagem(file);
-      const resp = await fetch("/api/map/image", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: file.name, dataUrl })
-      });
-      if (!resp.ok) {
-        throw new Error("upload falhou");
-      }
-      const json = await resp.json();
+      const url = await uploadMapImage(file.name, dataUrl);
       updateActiveObject((object) => {
-        object.imageDataUrl = json.url;
+        object.imageDataUrl = url;
       });
       setStatus(`Imagem do objeto "${activeObject.name}" atualizada.`);
     } catch (error) {
@@ -1115,7 +1365,7 @@ export default function MapEditor({ map, onSave, onClose }: MapEditorProps) {
       <header className="map-editor-head">
         <div>
           <h3>Editor de Mapa</h3>
-          <p>Use clique esquerdo para pintar e clique direito para apagar 1 slot da grid.</p>
+          <p>Clique esquerdo pinta, Alt + clique esquerdo apaga e botao direito arrasta o mapa.</p>
         </div>
         <div className="map-editor-actions">
           <button type="button" className="btn-ghost" onClick={onClose}>
@@ -1137,32 +1387,20 @@ export default function MapEditor({ map, onSave, onClose }: MapEditorProps) {
           <input value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} />
         </label>
       </div>
-
-      {/* Abas para seleção de edição */}
-      <div className="map-editor-tabs">
-        <button 
-          className={`tab-button ${editorTab === "layers" ? "active" : ""}`} 
-          onClick={() => setEditorTab("layers")}
-        >
-          Layers
-        </button>
-        <button 
-          className={`tab-button ${editorTab === "objects" ? "active" : ""}`} 
-          onClick={() => setEditorTab("objects")}
-        >
-          Objetos
-        </button>
-        <button 
-          className={`tab-button ${editorTab === "enemies" ? "active" : ""}`} 
-          onClick={() => setEditorTab("enemies")}
-        >
-          Inimigos
-        </button>
-      </div>
-
       <div className="map-editor-grid">
         <aside className="map-editor-sidebar">
-          <section className="map-editor-block">
+          <div className="map-editor-tabs map-editor-tabs-side">
+            <button className={`tab-button ${editorTab === "layers" ? "active" : ""}`} onClick={() => setEditorTab("layers")}>
+              Layers
+            </button>
+            <button className={`tab-button ${editorTab === "objects" ? "active" : ""}`} onClick={() => setEditorTab("objects")}>
+              Objetos
+            </button>
+            <button className={`tab-button ${editorTab === "enemies" ? "active" : ""}`} onClick={() => setEditorTab("enemies")}>
+              Inimigos
+            </button>
+          </div>
+          <section className={`map-editor-block ${editorTab === "layers" ? "" : "is-hidden"}`}>
             <div className="map-editor-block-head">
               <h4>Layers</h4>
               <button type="button" className="btn-ghost" onClick={addLayer}>
@@ -1215,7 +1453,7 @@ export default function MapEditor({ map, onSave, onClose }: MapEditorProps) {
             </div>
           </section>
 
-          <section className="map-editor-block">
+          <section className={`map-editor-block ${editorTab === "objects" ? "" : "is-hidden"}`}>
             <h4>Novo objeto</h4>
             <label>
               Nome
@@ -1258,7 +1496,7 @@ export default function MapEditor({ map, onSave, onClose }: MapEditorProps) {
             </button>
           </section>
 
-          <section className="map-editor-block">
+          <section className={`map-editor-block ${editorTab === "objects" ? "" : "is-hidden"}`}>
             <h4>Brushes</h4>
             <p className="empty-text">Duplo clique no brush para abrir o editor de recorte.</p>
             <div className="map-editor-objects">
@@ -1271,7 +1509,7 @@ export default function MapEditor({ map, onSave, onClose }: MapEditorProps) {
                   onDoubleClick={() => abrirEditorRecorte(object.id)}
                   title="Duplo clique para recortar imagem"
                 >
-                  <img src={object.imageDataUrl} alt={object.name} />
+                  <img src={resolveMapImageUrl(object.imageDataUrl)} alt={object.name} />
                   <strong>{object.name}</strong>
                   <small>
                     {object.maskWidth}x{object.maskHeight} {object.solid ? "solido" : "decor"}
@@ -1289,7 +1527,7 @@ export default function MapEditor({ map, onSave, onClose }: MapEditorProps) {
             </button>
           </section>
 
-          <section className="map-editor-block">
+          <section className={`map-editor-block ${editorTab === "objects" ? "" : "is-hidden"}`}>
             <h4>Editar objeto selecionado</h4>
             {!activeObject ? <p className="empty-text">Selecione um brush para editar.</p> : null}
             {activeObject ? (
@@ -1580,44 +1818,56 @@ export default function MapEditor({ map, onSave, onClose }: MapEditorProps) {
 
         <div className="map-editor-canvas-shell">
           <div className="map-editor-zoom-controls">
-            <button 
-              type="button" 
-              className="btn-ghost" 
-              onClick={() => setMapZoom((z) => Math.min(3, z + 0.2))}
+            <button
+              type="button"
+              className="btn-ghost"
+              onClick={() => zoomAroundViewportCenter(clamp(mapZoom + 0.2, MAP_ZOOM_MIN, MAP_ZOOM_MAX))}
               title="Zoom in"
             >
-              🔍 +
+              Zoom +
             </button>
             <span className="zoom-indicator">{Math.round(mapZoom * 100)}%</span>
-            <button 
-              type="button" 
-              className="btn-ghost" 
-              onClick={() => setMapZoom((z) => Math.max(0.5, z - 0.2))}
+            <button
+              type="button"
+              className="btn-ghost"
+              onClick={() => zoomAroundViewportCenter(clamp(mapZoom - 0.2, MAP_ZOOM_MIN, MAP_ZOOM_MAX))}
               title="Zoom out"
             >
-              🔍 −
+              Zoom -
             </button>
-            <button 
-              type="button" 
-              className="btn-ghost" 
-              onClick={() => {
-                setMapZoom(1);
-                setMapPanX(0);
-                setMapPanY(0);
-              }}
+            <input
+              type="range"
+              min={MAP_ZOOM_MIN * 100}
+              max={MAP_ZOOM_MAX * 100}
+              step={5}
+              value={Math.round(mapZoom * 100)}
+              onChange={(event) =>
+                zoomAroundViewportCenter(clamp(Number(event.target.value) / 100, MAP_ZOOM_MIN, MAP_ZOOM_MAX))
+              }
+              aria-label="Zoom do mapa"
+            />
+            <button
+              type="button"
+              className="btn-ghost"
+              onClick={() => applyClampedView(1, 0, 0)}
               title="Reset zoom"
             >
-              ⟲ Reset
+              Reset view
             </button>
+            <span className="map-editor-nav-hint">Navegar: botao direito + arrastar | zoom na lupa ou roda do mouse</span>
           </div>
-          <canvas
-            ref={canvasRef}
-            className="map-editor-canvas"
-            onMouseDown={handleMouseDown}
-            onMouseMove={handleMouseMove}
-            onMouseUp={handleMouseUp}
-            onContextMenu={(event) => event.preventDefault()}
-          />
+          <div className="map-editor-canvas-viewport">
+            <canvas
+              ref={canvasRef}
+              className={`map-editor-canvas ${isPanning ? "panning" : ""}`}
+              onMouseDown={handleMouseDown}
+              onMouseMove={handleMouseMove}
+              onMouseUp={handleMouseUp}
+              onMouseLeave={handleMouseUp}
+              onWheel={(event) => handleCanvasWheel(event.nativeEvent)}
+              onContextMenu={(event) => event.preventDefault()}
+            />
+          </div>
         </div>
       </div>
 

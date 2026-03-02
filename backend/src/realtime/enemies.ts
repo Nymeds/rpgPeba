@@ -1,5 +1,5 @@
 import { MAP_SIZE, SPAWN_POSITION, limitarAoMapa } from "../game.js";
-import { damagePlayer, buildPublicPlayersSnapshot } from "./world.js";
+import { damagePlayer, buildEnemyAwarePlayersSnapshot } from "./world.js";
 import type { Direction } from "./types.js";
 
 const ENEMY_SPAWN_RADIUS = 10;  // Raio de movimento livre
@@ -141,9 +141,10 @@ export function getAllEnemies(): OnlineEnemyState[] {
 }
 
 export function updateEnemyTargets(
-  playerPositions: Array<{ characterId: number; x: number; y: number; spawnedAtTime: number }>,
+  playerPositions: Array<{ characterId: number; x: number; y: number; isSpawnProtected: boolean }>,
   attackedByPlayerId: (enemyId: number) => number | null
 ): void {
+  const playersById = new Map(playerPositions.map((player) => [player.characterId, player]));
   for (const enemies of DATA_BY_SPAWN.values()) {
     for (const enemy of enemies) {
       if (enemy.deadUntilMs !== null && enemy.deadUntilMs > Date.now()) {
@@ -155,14 +156,17 @@ export function updateEnemyTargets(
 
       // Se foi atacado recentemente, muda o alvo
       if (lastAttackerId !== null) {
-        enemy.targetPlayerId = lastAttackerId;
-        enemy.lastTargetChangeAtMs = now;
+        const lastAttacker = playersById.get(lastAttackerId);
+        if (lastAttacker && !lastAttacker.isSpawnProtected) {
+          enemy.targetPlayerId = lastAttackerId;
+          enemy.lastTargetChangeAtMs = now;
+        }
       }
 
       // Se tem alvo, verifica distância
       if (enemy.targetPlayerId !== null) {
-        const targetPlayer = playerPositions.find((p) => p.characterId === enemy.targetPlayerId);
-        if (!targetPlayer) {
+        const targetPlayer = playersById.get(enemy.targetPlayerId);
+        if (!targetPlayer || targetPlayer.isSpawnProtected) {
           enemy.targetPlayerId = null;
           continue;
         }
@@ -178,6 +182,9 @@ export function updateEnemyTargets(
       // Se não tem alvo, procura por players próximos
       if (enemy.targetPlayerId === null) {
         for (const player of playerPositions) {
+          if (player.isSpawnProtected) {
+            continue;
+          }
           const dist = Math.hypot(player.x - enemy.x, player.y - enemy.y);
           if (dist <= ENEMY_CHASE_RADIUS) {
             enemy.targetPlayerId = player.characterId;
@@ -282,8 +289,8 @@ export function applyEnemyAttacks(
   const hits: Array<{ enemyId: number; enemyName: string; targetId: number; targetName: string; damage: number; targetHp: number; targetDied: boolean }> = [];
   
   // Carregar posições dos players para verificar distância
-  const playerSnapshots = buildPublicPlayersSnapshot();
-  const playerById = new Map(playerSnapshots.map((p) => [p.id, p]));
+  const playerSnapshots = buildEnemyAwarePlayersSnapshot(nowMs);
+  const playerById = new Map(playerSnapshots.map((p) => [p.characterId, p]));
 
   for (const enemies of DATA_BY_SPAWN.values()) {
     for (const enemy of enemies) {
@@ -316,6 +323,10 @@ export function applyEnemyAttacks(
       // Buscar informações do alvo
       const targetPlayer = playerById.get(enemy.targetPlayerId);
       if (!targetPlayer) {
+        enemy.targetPlayerId = null;
+        continue;
+      }
+      if (targetPlayer.isSpawnProtected) {
         enemy.targetPlayerId = null;
         continue;
       }
