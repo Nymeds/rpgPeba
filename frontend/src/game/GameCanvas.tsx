@@ -1,4 +1,4 @@
-import { type MouseEvent as ReactMouseEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ChangeEvent as ReactChangeEvent, type MouseEvent as ReactMouseEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import monkAttack1Gif from "../../images/Monk/attack1.gif";
 import monkAttack2Gif from "../../images/Monk/attack2.gif";
@@ -11,7 +11,7 @@ import warriorHurtGif from "../../images/Warrior/hurt.gif";
 import warriorIdleGif from "../../images/Warrior/idle.gif";
 import warriorRunGif from "../../images/Warrior/run.gif";
 import { setupInput } from "./input";
-import { PlayerType, type GameMapDefinition, type MoveInput, type WorldUpdatePayload } from "../types";
+import { PlayerType, type EnemyType, type GameMapDefinition, type MoveInput, type WorldUpdatePayload } from "../types";
 
 const TILE_SIZE = 160;
 const PLAYER_INTERPOLATION_RATE = 16;
@@ -45,6 +45,21 @@ type RenderPlayer = {
   hurtUntilMs: number;
 };
 
+type RenderEnemy = {
+  id: number;
+  name: string;
+  x: number;
+  y: number;
+  targetX: number;
+  targetY: number;
+  hp: number;
+  maxHp: number;
+  enemyType: EnemyType;
+  facing: "left" | "right";
+  moving: boolean;
+  attacking: boolean;
+};
+
 type OverlaySprite = {
   id: number;
   name: string;
@@ -60,6 +75,20 @@ type OverlaySprite = {
   attacking: boolean;
   attackPhaseTwo: boolean;
   self: boolean;
+};
+
+type OverlayEnemy = {
+  id: number;
+  name: string;
+  left: number;
+  top: number;
+  size: number;
+  hp: number;
+  maxHp: number;
+  enemyType: EnemyType;
+  facing: "left" | "right";
+  moving: boolean;
+  attacking: boolean;
 };
 
 type OverlayHealEffect = {
@@ -189,11 +218,23 @@ function escolherSpriteGif(
   return sprite.playerType === PlayerType.MONK ? monkIdleGif : warriorIdleGif;
 }
 
+function escolherGifInimigo(enemy: Pick<OverlayEnemy, "enemyType" | "moving" | "attacking">): string {
+  // Por enquanto, inimigos usam sempre os GIFs do Warrior
+  if (enemy.attacking) {
+    return warriorAttack1Gif;
+  }
+  if (enemy.moving) {
+    return warriorRunGif;
+  }
+  return warriorIdleGif;
+}
+
 export default function GameCanvas({ world, mapDefinition, selfPlayerId, onMove, onAttack, showGrid = false }: GameCanvasProps) {
   const mapShellRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const cameraRef = useRef<CameraState>({ x: 0, y: 0, initialized: false });
   const renderedPlayersRef = useRef<Map<number, RenderPlayer>>(new Map());
+  const renderedEnemiesRef = useRef<Map<number, RenderEnemy>>(new Map());
   const lastFrameAtRef = useRef<number | null>(null);
   const worldRef = useRef(world);
   const mapDefinitionRef = useRef(mapDefinition ?? null);
@@ -210,6 +251,7 @@ export default function GameCanvas({ world, mapDefinition, selfPlayerId, onMove,
   const nextAttackPhaseTwoByOwnerRef = useRef<Map<number, boolean>>(new Map());
 
   const [overlaySprites, setOverlaySprites] = useState<OverlaySprite[]>([]);
+  const [overlayEnemies, setOverlayEnemies] = useState<OverlayEnemy[]>([]);
   const [overlayHealEffects, setOverlayHealEffects] = useState<OverlayHealEffect[]>([]);
   const [aimLocked, setAimLocked] = useState(false);
   const [aimVector, setAimVector] = useState<{ x: number; y: number }>({ x: 1, y: 0 });
@@ -398,9 +440,11 @@ export default function GameCanvas({ world, mapDefinition, selfPlayerId, onMove,
 
       if (!currentWorld || !currentSelfId) {
         renderedPlayersRef.current.clear();
+        renderedEnemiesRef.current.clear();
         attackAnimationByOwnerRef.current.clear();
         nextAttackPhaseTwoByOwnerRef.current.clear();
         setOverlaySprites([]);
+        setOverlayEnemies([]);
         setOverlayHealEffects([]);
         context.fillStyle = "#f3f6f8";
         context.font = "600 20px Rajdhani";
@@ -470,10 +514,67 @@ export default function GameCanvas({ world, mapDefinition, selfPlayerId, onMove,
         }
       }
 
+      // Processar inimigos
+      const renderedEnemies = renderedEnemiesRef.current;
+      const targetEnemyIds = new Set<number>();
+
+      for (const enemy of currentWorld.enemies || []) {
+        targetEnemyIds.add(enemy.id);
+        const existing = renderedEnemies.get(enemy.id);
+        if (!existing) {
+          renderedEnemies.set(enemy.id, {
+            id: enemy.id,
+            name: enemy.name,
+            x: enemy.x,
+            y: enemy.y,
+            targetX: enemy.x,
+            targetY: enemy.y,
+            hp: enemy.hp,
+            maxHp: enemy.maxHp,
+            enemyType: enemy.enemyType,
+            facing: "right",
+            moving: false,
+            attacking: enemy.isAttacking
+          });
+          continue;
+        }
+        existing.name = enemy.name;
+        existing.hp = enemy.hp;
+        existing.maxHp = enemy.maxHp;
+        existing.enemyType = enemy.enemyType;
+        existing.targetX = enemy.x;
+        existing.targetY = enemy.y;
+        existing.attacking = enemy.isAttacking;
+      }
+
+      for (const enemy of renderedEnemies.values()) {
+        const previousX = enemy.x;
+        const previousY = enemy.y;
+        enemy.x += (enemy.targetX - enemy.x) * alphaPlayer;
+        enemy.y += (enemy.targetY - enemy.y) * alphaPlayer;
+        const movedX = enemy.x - previousX;
+        const movedY = enemy.y - previousY;
+        if (movedX < -0.001) {
+          enemy.facing = "left";
+        } else if (movedX > 0.001) {
+          enemy.facing = "right";
+        }
+        const remainingDistance = Math.hypot(enemy.targetX - enemy.x, enemy.targetY - enemy.y);
+        const frameDistance = Math.hypot(movedX, movedY);
+        enemy.moving = frameDistance > 0.001 || remainingDistance > 0.01;
+      }
+
+      for (const enemyId of [...renderedEnemies.keys()]) {
+        if (!targetEnemyIds.has(enemyId)) {
+          renderedEnemies.delete(enemyId);
+        }
+      }
+
       const selfPlayer = renderedPlayers.get(currentSelfId) ?? null;
 
       if (!selfPlayer) {
         setOverlaySprites([]);
+        setOverlayEnemies([]);
         setOverlayHealEffects([]);
         context.fillStyle = "#f3f6f8";
         context.font = "600 20px Rajdhani";
@@ -693,6 +794,31 @@ export default function GameCanvas({ world, mapDefinition, selfPlayerId, onMove,
       }
       setOverlaySprites(sprites);
 
+      // Criar overlay para inimigos
+      const enemySprites: OverlayEnemy[] = [];
+      for (const enemy of renderedEnemies.values()) {
+        const centerX = renderOffsetX + enemy.x * TILE_SIZE + TILE_SIZE / 2;
+        const floorY = renderOffsetY + enemy.y * TILE_SIZE + TILE_SIZE - 2;
+        const spriteSize = TILE_SIZE;
+        const drawX = Math.round(centerX - spriteSize / 2);
+        const drawY = Math.round(floorY - spriteSize);
+
+        enemySprites.push({
+          id: enemy.id,
+          name: enemy.name,
+          left: drawX,
+          top: drawY,
+          size: spriteSize,
+          hp: enemy.hp,
+          maxHp: enemy.maxHp,
+          enemyType: enemy.enemyType,
+          facing: enemy.facing,
+          moving: enemy.moving,
+          attacking: enemy.attacking
+        });
+      }
+      setOverlayEnemies(enemySprites);
+
       rafId = window.requestAnimationFrame(draw);
     };
 
@@ -765,6 +891,28 @@ export default function GameCanvas({ world, mapDefinition, selfPlayerId, onMove,
               className={`player-sprite-img ${sprite.facing === "left" ? "flip-left" : ""}`}
             />
             <span className="player-sprite-name">{sprite.name}</span>
+          </div>
+        ))}
+        {overlayEnemies.map((enemy) => (
+          <div
+            key={enemy.id}
+            className="enemy-sprite"
+            style={{
+              left: enemy.left,
+              top: enemy.top,
+              width: enemy.size,
+              height: enemy.size
+            }}
+          >
+            <div className="enemy-sprite-health">
+              <span style={{ width: `${healthPercent(enemy.hp, enemy.maxHp)}%` }} />
+            </div>
+            <img
+              src={escolherGifInimigo(enemy)}
+              alt=""
+              className={`enemy-sprite-img ${enemy.facing === "left" ? "flip-left" : ""}`}
+            />
+            <span className="enemy-sprite-name">{enemy.name}</span>
           </div>
         ))}
       </div>

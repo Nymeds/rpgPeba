@@ -1,4 +1,5 @@
 import { MAP_SIZE } from "../game.js";
+import type { EnemySpawnDefinition } from "./enemies.js";
 
 export const DEFAULT_MAP_KEY = "default";
 const DEFAULT_MAP_NAME = "Mapa Principal";
@@ -27,6 +28,7 @@ export type PersistedMapData = {
   mapSize: number;
   objects: MapObjectDefinition[];
   layers: MapLayerDefinition[];
+  enemySpawns?: EnemySpawnDefinition[];
 };
 
 function criarGradeVazia(): Array<Array<string | null>> {
@@ -46,7 +48,8 @@ export function criarMapaPadrao(): PersistedMapData {
         visible: true,
         tiles: criarGradeVazia()
       }
-    ]
+    ],
+    enemySpawns: []
   };
 }
 
@@ -91,6 +94,7 @@ function normalizarMapa(rawMap: unknown): PersistedMapData {
   const source = rawMap as Partial<PersistedMapData>;
   const rawObjects = Array.isArray(source.objects) ? source.objects : [];
   const rawLayers = Array.isArray(source.layers) ? source.layers : [];
+  const rawEnemySpawns = Array.isArray(source.enemySpawns) ? source.enemySpawns : [];
 
   const objects: MapObjectDefinition[] = [];
   const objectIds = new Set<string>();
@@ -150,6 +154,28 @@ function normalizarMapa(rawMap: unknown): PersistedMapData {
     });
   }
 
+  const enemySpawns: EnemySpawnDefinition[] = [];
+  const spawnIds = new Set<string>();
+  for (const raw of rawEnemySpawns) {
+    if (!raw || typeof raw !== "object") {
+      continue;
+    }
+    const spawn = raw as Partial<EnemySpawnDefinition>;
+    const id = normalizarTexto(spawn.id, `spawn-${enemySpawns.length + 1}`, 48);
+    if (spawnIds.has(id)) {
+      continue;
+    }
+    spawnIds.add(id);
+    enemySpawns.push({
+      id,
+      name: normalizarTexto(spawn.name, `Inimigo ${enemySpawns.length + 1}`, 40),
+      x: normalizarNumeroInteiro(spawn.x, 0, 79, 0),
+      y: normalizarNumeroInteiro(spawn.y, 0, 79, 0),
+      enemyType: (spawn.enemyType === "MONK" ? "MONK" : "WARRIOR") as "WARRIOR" | "MONK",
+      spawnCount: normalizarNumeroInteiro(spawn.spawnCount, 1, 10, 1)
+    });
+  }
+
   if (layers.length === 0) {
     return fallback;
   }
@@ -157,7 +183,8 @@ function normalizarMapa(rawMap: unknown): PersistedMapData {
   return {
     mapSize: MAP_SIZE,
     objects,
-    layers
+    layers,
+    enemySpawns
   };
 }
 

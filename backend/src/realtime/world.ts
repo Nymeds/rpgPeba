@@ -9,6 +9,8 @@ import {
 } from "../game.js";
 import type { Direction } from "./types.js";
 import { tileSolido } from "./mapEditor.js";
+import { damageEnemy, buildPublicEnemiesSnapshot } from "./enemies.js";
+import type { PublicEnemy } from "./enemies.js";
 
 const ATTACK_DAMAGE = 20;
 const MONK_HEAL_AMOUNT = 16;
@@ -108,6 +110,7 @@ type ActiveAttackState = {
   radius: number;
   expiresAt: number;
   hitCharacterIds: Set<number>;
+  hitEnemyIds: Set<number>;
 };
 
 type RegisterOnlinePlayerInput = Omit<
@@ -119,6 +122,9 @@ const onlinePlayersBySocket = new Map<string, OnlinePlayerState>();
 const socketByCharacterId = new Map<number, string>();
 const activeAttacksById = new Map<number, ActiveAttackState>();
 let nextAttackId = 1;
+
+// Rastreamento de ataques aos inimigos para fins de alvo da IA
+const lastAttackToEnemyByPlayerId = new Map<number, Map<number, number>>();  // playerId -> { enemyId -> timestamp }
 
 function vectorLength(x: number, y: number): number {
   return Math.hypot(x, y);
@@ -294,7 +300,8 @@ export function createPlayerAttack(
     y: attackY,
     radius: ATTACK_RADIUS_TILES,
     expiresAt,
-    hitCharacterIds: new Set<number>()
+    hitCharacterIds: new Set<number>(),
+    hitEnemyIds: new Set<number>()
   });
 
   return {
@@ -383,8 +390,13 @@ export function applyMovement(deltaSeconds: number, velocityTilesPerSecond: numb
 export function applyAttackDamage(nowMs = Date.now()): AttackHitResult[] {
   cleanupExpiredAttacks(nowMs);
   const hits: AttackHitResult[] = [];
+  const allEnemies = buildPublicEnemiesSnapshot();
+  
+  // Criar mapa para acesso rápido de inimigos por ID
+  const enemiesById = new Map(allEnemies.map((e) => [e.id, e]));
 
   for (const attack of activeAttacksById.values()) {
+    // Atacar players
     for (const player of onlinePlayersBySocket.values()) {
       if (player.characterId === attack.ownerCharacterId) {
         continue;
@@ -457,6 +469,39 @@ export function applyAttackDamage(nowMs = Date.now()): AttackHitResult[] {
         amount: ATTACK_DAMAGE,
         hpAfter: player.hp,
         targetDied
+      });
+    }
+
+    // Atacar inimigos
+    for (const enemy of allEnemies) {
+      if (attack.hitEnemyIds.has(enemy.id) || !enemiesById.has(enemy.id)) {
+        continue;
+      }
+
+      const enemyCenterX = enemy.x + 0.5;
+      const enemyCenterY = enemy.y + 0.5;
+      const attackCenterX = attack.x + 0.5;
+      const attackCenterY = attack.y + 0.5;
+      const distance = Math.hypot(enemyCenterX - attackCenterX, enemyCenterY - attackCenterY);
+      const insideAttack = distance <= attack.radius;
+
+      if (!insideAttack) {
+        continue;
+      }
+
+      attack.hitEnemyIds.add(enemy.id);
+
+      // Registrar quem atacou este inimigo
+      if (!lastAttackToEnemyByPlayerId.has(attack.ownerCharacterId)) {
+        lastAttackToEnemyByPlayerId.set(attack.ownerCharacterId, new Map());
+      }
+      lastAttackToEnemyByPlayerId.get(attack.ownerCharacterId)!.set(enemy.id, nowMs);
+
+      // Aplicar dano ao inimigo
+      damageEnemy(enemy.id, ATTACK_DAMAGE, {
+        characterId: attack.ownerCharacterId,
+        x: onlinePlayersBySocket.get(getSocketIdByCharacterId(attack.ownerCharacterId) ?? "")?.x ?? 0,
+        y: onlinePlayersBySocket.get(getSocketIdByCharacterId(attack.ownerCharacterId) ?? "")?.y ?? 0
       });
     }
   }
@@ -569,6 +614,38 @@ export function buildPublicPlayersSnapshot(): PublicPlayer[] {
     }))
     .sort((a, b) => a.id - b.id);
 }
+
+// Função para aplicar dano a um player (chamada por inimigos)
+export function damagePlayer(characterId: number, damage: number): { damageTaken: number; newHp: number; died: boolean } | null {
+  for (const player of onlinePlayersBySocket.values()) {
+    if (player.characterId === characterId) {
+      if (player.deadUntilMs !== null || player.hp <= 0) {
+        return null; // Já está morto
+      }
+      const damageTaken = Math.min(damage, player.hp);
+      player.hp = Math.max(0, player.hp - damage);
+      const died = player.hp === 0;
+      player.dirtyState = true;
+      return { damageTaken, newHp: player.hp, died };
+    }
+  }
+  return null; // Player não encontrado
+}
+export function getLastAttackerOfEnemy(enemyId: number): number | null {
+  let mostRecentAttacker: { playerId: number; timestamp: number } | null = null;
+
+  for (const [playerId, enemyMap] of lastAttackToEnemyByPlayerId.entries()) {
+    const timestamp = enemyMap.get(enemyId);
+    if (timestamp !== undefined) {
+      if (!mostRecentAttacker || timestamp > mostRecentAttacker.timestamp) {
+        mostRecentAttacker = { playerId, timestamp };
+      }
+    }
+  }
+
+  return mostRecentAttacker?.playerId ?? null;
+}
+
 //estado dos ataques ativos no mundo
 export function buildPublicAttacksSnapshot(nowMs = Date.now()): PublicAttack[] {
   cleanupExpiredAttacks(nowMs);

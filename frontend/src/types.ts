@@ -57,11 +57,28 @@ export type PublicAttack = {
   expiresAt: number;
 };
 
+export enum EnemyType {
+  WARRIOR = "WARRIOR",
+  MONK = "MONK"
+}
+
+export type PublicEnemy = {
+  id: number;
+  name: string;
+  x: number;
+  y: number;
+  hp: number;
+  maxHp: number;
+  enemyType: EnemyType;
+  isAttacking: boolean;
+};
+
 export type WorldUpdatePayload = {
   mapSize: number;
   tick: number;
   mapRevision: number;
   players: PublicPlayer[];
+  enemies: PublicEnemy[];
   attacks: PublicAttack[];
 };
 
@@ -113,7 +130,17 @@ export type GameMapDefinition = {
   mapSize: number;
   objects: MapObjectDefinition[];
   layers: MapLayerDefinition[];
+  enemySpawns?: EnemySpawnDefinition[];
   updatedAt: string;
+};
+
+export type EnemySpawnDefinition = {
+  id: string;
+  name: string;
+  x: number;
+  y: number;
+  enemyType: "WARRIOR" | "MONK";
+  spawnCount: number;
 };
 
 export type SocketAck = (response: { ok: boolean; error?: string }) => void;

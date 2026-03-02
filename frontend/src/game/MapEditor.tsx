@@ -1,6 +1,6 @@
 import { type ChangeEvent, type MouseEvent, useEffect, useMemo, useRef, useState } from "react";
 
-import type { GameMapDefinition, MapLayerDefinition, MapObjectDefinition } from "../types";
+import type { GameMapDefinition, MapLayerDefinition, MapObjectDefinition, EnemySpawnDefinition } from "../types";
 
 const EDITOR_TILE_SIZE = 22;
 const CROP_EDITOR_CANVAS_SIZE = 460;
@@ -124,6 +124,8 @@ export default function MapEditor({ map, onSave, onClose }: MapEditorProps) {
   const [draft, setDraft] = useState<GameMapDefinition>(() => cloneMap(map));
   const [activeLayerId, setActiveLayerId] = useState<string>(map.layers[0]?.id ?? "");
   const [activeObjectId, setActiveObjectId] = useState<string>(map.objects[0]?.id ?? "");
+  const [activeEnemySpawnId, setActiveEnemySpawnId] = useState<string>(map.enemySpawns?.[0]?.id ?? "");
+  const [editorTab, setEditorTab] = useState<"layers" | "objects" | "enemies">("layers");
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<string>("");
 
@@ -141,10 +143,23 @@ export default function MapEditor({ map, onSave, onClose }: MapEditorProps) {
   const [cropNewObjectMaskHeight, setCropNewObjectMaskHeight] = useState(1);
   const [cropNewObjectSolid, setCropNewObjectSolid] = useState(false);
 
+  // Estados para spawns de inimigos
+  const [newEnemySpawnX, setNewEnemySpawnX] = useState(40);
+  const [newEnemySpawnY, setNewEnemySpawnY] = useState(40);
+  const [newEnemySpawnType, setNewEnemySpawnType] = useState<"WARRIOR" | "MONK">("WARRIOR");
+  const [newEnemySpawnCount, setNewEnemySpawnCount] = useState(1);
+  const [newEnemySpawnName, setNewEnemySpawnName] = useState("Spawn Inimigo");
+
+  // Estados para zoom e pan (deslocamento)
+  const [mapZoom, setMapZoom] = useState(1);
+  const [mapPanX, setMapPanX] = useState(0);
+  const [mapPanY, setMapPanY] = useState(0);
+
   useEffect(() => {
     setDraft(cloneMap(map));
     setActiveLayerId(map.layers[0]?.id ?? "");
     setActiveObjectId(map.objects[0]?.id ?? "");
+    setActiveEnemySpawnId(map.enemySpawns?.[0]?.id ?? "");
     setCropEditorObjectId(null);
     setCropSelection(null);
     setCropGridEnabled(false);
@@ -170,6 +185,13 @@ export default function MapEditor({ map, onSave, onClose }: MapEditorProps) {
     setActiveObjectId(draft.objects[0]?.id ?? "");
   }, [activeObjectId, draft.objects]);
 
+  useEffect(() => {
+    if (draft.enemySpawns?.some((spawn) => spawn.id === activeEnemySpawnId)) {
+      return;
+    }
+    setActiveEnemySpawnId(draft.enemySpawns?.[0]?.id ?? "");
+  }, [activeEnemySpawnId, draft.enemySpawns]);
+
   const activeLayerIndex = useMemo(
     () => draft.layers.findIndex((layer) => layer.id === activeLayerId),
     [activeLayerId, draft.layers]
@@ -177,6 +199,10 @@ export default function MapEditor({ map, onSave, onClose }: MapEditorProps) {
   const activeObject = useMemo(
     () => draft.objects.find((entry) => entry.id === activeObjectId) ?? null,
     [activeObjectId, draft.objects]
+  );
+  const activeEnemySpawn = useMemo(
+    () => draft.enemySpawns?.find((spawn) => spawn.id === activeEnemySpawnId) ?? null,
+    [activeEnemySpawnId, draft.enemySpawns]
   );
   const cropEditorObject = useMemo(
     () => draft.objects.find((entry) => entry.id === cropEditorObjectId) ?? null,
@@ -464,9 +490,17 @@ export default function MapEditor({ map, onSave, onClose }: MapEditorProps) {
     if (!canvas) {
       return null;
     }
-    const rect = canvas.getBoundingClientRect();
-    const x = Math.floor((event.clientX - rect.left) / EDITOR_TILE_SIZE);
-    const y = Math.floor((event.clientY - rect.top) / EDITOR_TILE_SIZE);
+    // offsetX/offsetY são relativos ao elemento, considerando scroll
+    const nativeEvent = event.nativeEvent as unknown as { offsetX: number; offsetY: number };
+    const canvasX = nativeEvent.offsetX;
+    const canvasY = nativeEvent.offsetY;
+    
+    // Aplicar transformação inversa de zoom e pan
+    const worldX = (canvasX - mapPanX) / mapZoom;
+    const worldY = (canvasY - mapPanY) / mapZoom;
+    
+    const x = Math.floor(worldX / EDITOR_TILE_SIZE);
+    const y = Math.floor(worldY / EDITOR_TILE_SIZE);
     if (x < 0 || y < 0 || x >= draft.mapSize || y >= draft.mapSize) {
       return null;
     }
@@ -481,6 +515,47 @@ export default function MapEditor({ map, onSave, onClose }: MapEditorProps) {
     if (!tile) {
       return;
     }
+
+    // se estivermos na aba de inimigos, tratamos o clique como posicionamento/remoção de spawn
+    if (editorTab === "enemies") {
+      if (event.button === 2) {
+        // botao direito remove spawn na posicao, se existir
+        setDraft((current) => {
+          if (!current.enemySpawns) return current;
+          const nextSpawns = current.enemySpawns.filter((s) => !(s.x === tile.x && s.y === tile.y));
+          return { ...current, enemySpawns: nextSpawns };
+        });
+        return;
+      }
+
+      // botao esquerdo: se existe spawn ativo, mover; senão cria novo
+      if (activeEnemySpawnId) {
+        updateEnemySpawn(activeEnemySpawnId, (s) => {
+          s.x = tile.x;
+          s.y = tile.y;
+        });
+      } else {
+        // cria novo spawn diretamente
+        const count = (draft.enemySpawns?.length ?? 0) + 1;
+        const newSpawn: EnemySpawnDefinition = {
+          id: criarId("spawn"),
+          name: `Spawn Inimigo ${count}`,
+          x: tile.x,
+          y: tile.y,
+          enemyType: "WARRIOR",
+          spawnCount: 1
+        };
+        setDraft((current) => ({
+          ...current,
+          enemySpawns: [...(current.enemySpawns || []), newSpawn]
+        }));
+        setActiveEnemySpawnId(newSpawn.id);
+      }
+
+      return;
+    }
+
+    // comportamento padrão de pintura
     const erase = event.button === 2;
     drawingRef.current = true;
     drawingEraseRef.current = erase;
@@ -489,6 +564,7 @@ export default function MapEditor({ map, onSave, onClose }: MapEditorProps) {
   }
 
   function handleMouseMove(event: MouseEvent<HTMLCanvasElement>): void {
+    // arrastar a partir de clique já registrado
     if (!drawingRef.current) {
       return;
     }
@@ -496,6 +572,18 @@ export default function MapEditor({ map, onSave, onClose }: MapEditorProps) {
     if (!tile) {
       return;
     }
+
+    if (editorTab === "enemies") {
+      // enquanto arrastamos com botão esquerdo, movemos spawn ativo
+      if (activeEnemySpawnId && !drawingEraseRef.current) {
+        updateEnemySpawn(activeEnemySpawnId, (s) => {
+          s.x = tile.x;
+          s.y = tile.y;
+        });
+      }
+      return;
+    }
+
     const erase = drawingEraseRef.current;
     const key = `${tile.x}:${tile.y}:${erase ? "erase" : "paint"}`;
     if (lastTileRef.current === key) {
@@ -674,6 +762,11 @@ export default function MapEditor({ map, onSave, onClose }: MapEditorProps) {
     context.fillStyle = "#0f1721";
     context.fillRect(0, 0, canvas.width, canvas.height);
 
+    // Aplicar transformações de zoom e pan
+    context.save();
+    context.translate(mapPanX, mapPanY);
+    context.scale(mapZoom, mapZoom);
+
     const objectById = new Map<string, MapObjectDefinition>(draft.objects.map((entry) => [entry.id, entry]));
 
     for (const layer of draft.layers) {
@@ -743,7 +836,45 @@ export default function MapEditor({ map, onSave, onClose }: MapEditorProps) {
       context.lineTo(canvas.width, y * EDITOR_TILE_SIZE);
       context.stroke();
     }
-  }, [draft]);
+
+    // Se houver spawns de inimigos, marca-los
+    if (draft.enemySpawns) {
+      for (const spawn of draft.enemySpawns) {
+        const cx = spawn.x * EDITOR_TILE_SIZE + EDITOR_TILE_SIZE / 2;
+        const cy = spawn.y * EDITOR_TILE_SIZE + EDITOR_TILE_SIZE / 2;
+        context.fillStyle = "rgba(255, 80, 80, 0.6)";
+        context.beginPath();
+        context.arc(cx, cy, EDITOR_TILE_SIZE * 0.4, 0, Math.PI * 2);
+        context.fill();
+        // destaque spawn ativo
+        if (spawn.id === activeEnemySpawnId) {
+          context.strokeStyle = "rgba(255, 80, 80, 1)";
+          context.lineWidth = 2;
+          context.beginPath();
+          context.arc(cx, cy, EDITOR_TILE_SIZE * 0.45, 0, Math.PI * 2);
+          context.stroke();
+        }
+      }
+    }
+
+    // Desenhar círculo de spawn de jogadores no centro
+    context.strokeStyle = "rgba(100, 180, 255, 0.6)";
+    context.lineWidth = 3;
+    const spawnX = 40 * EDITOR_TILE_SIZE + EDITOR_TILE_SIZE / 2;
+    const spawnY = 40 * EDITOR_TILE_SIZE + EDITOR_TILE_SIZE / 2;
+    const spawnRadius = 2.5 * EDITOR_TILE_SIZE; // Raio visual
+    context.beginPath();
+    context.arc(spawnX, spawnY, spawnRadius, 0, Math.PI * 2);
+    context.stroke();
+
+    // Desenhar ponto central do spawn
+    context.fillStyle = "rgba(100, 180, 255, 0.8)";
+    context.beginPath();
+    context.arc(spawnX, spawnY, 6, 0, Math.PI * 2);
+    context.fill();
+
+    context.restore();
+  }, [draft, mapZoom, mapPanX, mapPanY, activeEnemySpawnId]);
 
   function addLayer(): void {
     const id = criarId("layer");
@@ -821,7 +952,17 @@ export default function MapEditor({ map, onSave, onClose }: MapEditorProps) {
     }
     try {
       const dataUrl = await lerArquivoImagem(file);
-      setNewObjectImageDataUrl(dataUrl);
+      // enviar para servidor para ser salvo em pasta de assets
+      const resp = await fetch("/api/map/image", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: file.name, dataUrl })
+      });
+      if (!resp.ok) {
+        throw new Error("upload falhou");
+      }
+      const json = await resp.json();
+      setNewObjectImageDataUrl(json.url);
       setStatus(`Imagem carregada: ${file.name}`);
     } catch (error) {
       console.error(error);
@@ -836,8 +977,17 @@ export default function MapEditor({ map, onSave, onClose }: MapEditorProps) {
     }
     try {
       const dataUrl = await lerArquivoImagem(file);
+      const resp = await fetch("/api/map/image", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: file.name, dataUrl })
+      });
+      if (!resp.ok) {
+        throw new Error("upload falhou");
+      }
+      const json = await resp.json();
       updateActiveObject((object) => {
-        object.imageDataUrl = dataUrl;
+        object.imageDataUrl = json.url;
       });
       setStatus(`Imagem do objeto "${activeObject.name}" atualizada.`);
     } catch (error) {
@@ -897,6 +1047,48 @@ export default function MapEditor({ map, onSave, onClose }: MapEditorProps) {
     setActiveObjectId((currentId) => (currentId === removedId ? "" : currentId));
   }
 
+  // Funções de spawn de inimigos
+  function addEnemySpawn(): void {
+    if (!draft.enemySpawns) {
+      draft.enemySpawns = [];
+    }
+
+    const newSpawn: import("../types").EnemySpawnDefinition = {
+      id: criarId("spawn"),
+      name: newEnemySpawnName.trim() || `Spawn Inimigo ${draft.enemySpawns.length + 1}`,
+      x: Math.max(0, Math.min(79, newEnemySpawnX)),
+      y: Math.max(0, Math.min(79, newEnemySpawnY)),
+      enemyType: newEnemySpawnType,
+      spawnCount: Math.max(1, Math.min(10, newEnemySpawnCount))
+    };
+
+    setDraft((current) => ({
+      ...current,
+      enemySpawns: [...(current.enemySpawns || []), newSpawn]
+    }));
+
+    setActiveEnemySpawnId(newSpawn.id);
+    setStatus(`Spawn de inimigo criado: ${newSpawn.name}`);
+  }
+
+  function removeEnemySpawn(spawnId: string): void {
+    setDraft((current) => ({
+      ...current,
+      enemySpawns: (current.enemySpawns || []).filter((spawn) => spawn.id !== spawnId)
+    }));
+    setStatus("Spawn de inimigo removido.");
+  }
+
+  function updateEnemySpawn(spawnId: string, updater: (spawn: import("../types").EnemySpawnDefinition) => void): void {
+    setDraft((current) => {
+      const spawns = [...(current.enemySpawns || [])];
+      const index = spawns.findIndex((s) => s.id === spawnId);
+      if (index < 0) return current;
+      updater(spawns[index]);
+      return { ...current, enemySpawns: spawns };
+    });
+  }
+
   async function saveMap(): Promise<void> {
     setSaving(true);
     setStatus("Salvando mapa...");
@@ -906,7 +1098,8 @@ export default function MapEditor({ map, onSave, onClose }: MapEditorProps) {
         name: draft.name.trim() || "Mapa Principal",
         mapSize: draft.mapSize,
         objects: draft.objects,
-        layers: draft.layers
+        layers: draft.layers,
+        enemySpawns: draft.enemySpawns || []
       });
       setStatus("Mapa salvo no banco com sucesso.");
     } catch (error) {
@@ -943,6 +1136,28 @@ export default function MapEditor({ map, onSave, onClose }: MapEditorProps) {
           Nome do mapa
           <input value={draft.name} onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))} />
         </label>
+      </div>
+
+      {/* Abas para seleção de edição */}
+      <div className="map-editor-tabs">
+        <button 
+          className={`tab-button ${editorTab === "layers" ? "active" : ""}`} 
+          onClick={() => setEditorTab("layers")}
+        >
+          Layers
+        </button>
+        <button 
+          className={`tab-button ${editorTab === "objects" ? "active" : ""}`} 
+          onClick={() => setEditorTab("objects")}
+        >
+          Objetos
+        </button>
+        <button 
+          className={`tab-button ${editorTab === "enemies" ? "active" : ""}`} 
+          onClick={() => setEditorTab("enemies")}
+        >
+          Inimigos
+        </button>
       </div>
 
       <div className="map-editor-grid">
@@ -1203,9 +1418,198 @@ export default function MapEditor({ map, onSave, onClose }: MapEditorProps) {
               </>
             ) : null}
           </section>
+
+          {editorTab === "enemies" && (
+            <>
+              <section className="map-editor-block">
+                <div className="map-editor-block-head">
+                  <h4>Spawns de Inimigos</h4>
+                  <button type="button" className="btn-ghost" onClick={addEnemySpawn}>
+                    + Spawn
+                  </button>
+                </div>
+                <div className="map-editor-list">
+                  {draft.enemySpawns && draft.enemySpawns.map((spawn) => (
+                    <article key={spawn.id} className={`map-editor-spawn ${spawn.id === activeEnemySpawnId ? "active" : ""}`}>
+                      <div>
+                        <strong>{spawn.name}</strong>
+                        <small>
+                          Pos: ({spawn.x}, {spawn.y}) | Tipo: {spawn.enemyType} | Qty: {spawn.spawnCount}
+                        </small>
+                      </div>
+                      <div className="map-editor-spawn-actions">
+                        <button type="button" className="btn-ghost" onClick={() => setActiveEnemySpawnId(spawn.id)}>
+                          editar
+                        </button>
+                        <button type="button" className="btn-ghost" onClick={() => removeEnemySpawn(spawn.id)}>
+                          x
+                        </button>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              </section>
+
+              <section className="map-editor-block">
+                <h4>Novo Spawn</h4>
+                <label>
+                  Nome
+                  <input value={newEnemySpawnName} onChange={(event) => setNewEnemySpawnName(event.target.value)} />
+                </label>
+                <div className="map-editor-spawn-coords">
+                  <label>
+                    X
+                    <input
+                      type="number"
+                      min={0}
+                      max={79}
+                      value={newEnemySpawnX}
+                      onChange={(event) => setNewEnemySpawnX(Math.max(0, Math.min(79, Number(event.target.value))))}
+                    />
+                  </label>
+                  <label>
+                    Y
+                    <input
+                      type="number"
+                      min={0}
+                      max={79}
+                      value={newEnemySpawnY}
+                      onChange={(event) => setNewEnemySpawnY(Math.max(0, Math.min(79, Number(event.target.value))))}
+                    />
+                  </label>
+                </div>
+                <label>
+                  Tipo de Inimigo
+                  <select value={newEnemySpawnType} onChange={(event) => setNewEnemySpawnType(event.target.value as "WARRIOR" | "MONK")}>
+                    <option value="WARRIOR">Warrior</option>
+                    <option value="MONK">Monk</option>
+                  </select>
+                </label>
+                <label>
+                  Quantidade de Inimigos
+                  <input
+                    type="number"
+                    min={1}
+                    max={10}
+                    value={newEnemySpawnCount}
+                    onChange={(event) => setNewEnemySpawnCount(Math.max(1, Math.min(10, Number(event.target.value))))}
+                  />
+                </label>
+                <button type="button" className="btn-primary" onClick={addEnemySpawn}>
+                  Adicionar Spawn
+                </button>
+              </section>
+
+              {activeEnemySpawn && (
+                <section className="map-editor-block">
+                  <h4>Editar Spawn: {activeEnemySpawn.name}</h4>
+                  <label>
+                    Nome
+                    <input
+                      value={activeEnemySpawn.name}
+                      onChange={(event) =>
+                        updateEnemySpawn(activeEnemySpawn.id, (spawn) => {
+                          spawn.name = event.target.value;
+                        })
+                      }
+                    />
+                  </label>
+                  <div className="map-editor-spawn-coords">
+                    <label>
+                      X
+                      <input
+                        type="number"
+                        min={0}
+                        max={79}
+                        value={activeEnemySpawn.x}
+                        onChange={(event) =>
+                          updateEnemySpawn(activeEnemySpawn.id, (spawn) => {
+                            spawn.x = Math.max(0, Math.min(79, Number(event.target.value)));
+                          })
+                        }
+                      />
+                    </label>
+                    <label>
+                      Y
+                      <input
+                        type="number"
+                        min={0}
+                        max={79}
+                        value={activeEnemySpawn.y}
+                        onChange={(event) =>
+                          updateEnemySpawn(activeEnemySpawn.id, (spawn) => {
+                            spawn.y = Math.max(0, Math.min(79, Number(event.target.value)));
+                          })
+                        }
+                      />
+                    </label>
+                  </div>
+                  <label>
+                    Tipo de Inimigo
+                    <select
+                      value={activeEnemySpawn.enemyType}
+                      onChange={(event) =>
+                        updateEnemySpawn(activeEnemySpawn.id, (spawn) => {
+                          spawn.enemyType = event.target.value as "WARRIOR" | "MONK";
+                        })
+                      }
+                    >
+                      <option value="WARRIOR">Warrior</option>
+                      <option value="MONK">Monk</option>
+                    </select>
+                  </label>
+                  <label>
+                    Quantidade
+                    <input
+                      type="number"
+                      min={1}
+                      max={10}
+                      value={activeEnemySpawn.spawnCount}
+                      onChange={(event) =>
+                        updateEnemySpawn(activeEnemySpawn.id, (spawn) => {
+                          spawn.spawnCount = Math.max(1, Math.min(10, Number(event.target.value)));
+                        })
+                      }
+                    />
+                  </label>
+                </section>
+              )}
+            </>
+          )}
         </aside>
 
         <div className="map-editor-canvas-shell">
+          <div className="map-editor-zoom-controls">
+            <button 
+              type="button" 
+              className="btn-ghost" 
+              onClick={() => setMapZoom((z) => Math.min(3, z + 0.2))}
+              title="Zoom in"
+            >
+              🔍 +
+            </button>
+            <span className="zoom-indicator">{Math.round(mapZoom * 100)}%</span>
+            <button 
+              type="button" 
+              className="btn-ghost" 
+              onClick={() => setMapZoom((z) => Math.max(0.5, z - 0.2))}
+              title="Zoom out"
+            >
+              🔍 −
+            </button>
+            <button 
+              type="button" 
+              className="btn-ghost" 
+              onClick={() => {
+                setMapZoom(1);
+                setMapPanX(0);
+                setMapPanY(0);
+              }}
+              title="Reset zoom"
+            >
+              ⟲ Reset
+            </button>
+          </div>
           <canvas
             ref={canvasRef}
             className="map-editor-canvas"

@@ -108,6 +108,15 @@ const mapLayerSchema = z.object({
     )
 });
 
+const enemySpawnSchema = z.object({
+  id: z.string().trim().min(1).max(48),
+  name: z.string().trim().min(1).max(40),
+  x: z.number().int().min(0).max(MAP_SIZE - 1),
+  y: z.number().int().min(0).max(MAP_SIZE - 1),
+  enemyType: z.enum(["WARRIOR", "MONK"]),
+  spawnCount: z.number().int().min(1).max(10)
+});
+
 const saveMapBodySchema = z.object({
   mapKey: z.string().trim().min(1).max(32).optional(),
   name: z.string().trim().min(1, "name: obrigatorio.").max(40, "name: maximo 40 caracteres."),
@@ -116,7 +125,8 @@ const saveMapBodySchema = z.object({
     .int("mapSize: inteiro.")
     .refine((value) => value === MAP_SIZE, `mapSize: neste prototipo deve ser ${MAP_SIZE}.`),
   objects: z.array(mapObjectSchema).max(256, "objects: maximo 256 objetos."),
-  layers: z.array(mapLayerSchema).min(1, "layers: minimo 1 layer.").max(32, "layers: maximo 32 layers.")
+  layers: z.array(mapLayerSchema).min(1, "layers: minimo 1 layer.").max(32, "layers: maximo 32 layers."),
+  enemySpawns: z.array(enemySpawnSchema).max(100).optional()
 });
 
 // Tecnico: Tipos inferidos automaticamente do schema.
@@ -135,6 +145,7 @@ export type SaveMapBody = {
   mapSize: number;
   objects: SaveMapObjectBody[];
   layers: SaveMapLayerBody[];
+  enemySpawns?: z.infer<typeof enemySpawnSchema>[];
 };
 
 function falharComZod(error: z.ZodError): ValidationResult<never> {

@@ -9,8 +9,18 @@ import {
   applyMovement,
   applyRespawns,
   buildPublicAttacksSnapshot,
-  buildPublicPlayersSnapshot
+  buildPublicPlayersSnapshot,
+  getLastAttackerOfEnemy
 } from "./world.js";
+import {
+  applyEnemyMovement,
+  applyEnemyAttacks,
+  applyEnemyRespawns,
+  buildPublicEnemiesSnapshot,
+  updateEnemyTargets,
+  getAllEnemies
+} from "./enemies.js";
+import { tileSolido } from "./mapEditor.js";
 
 const TICK_RATE = 20;
 const TICK_INTERVAL_MS = 1000 / TICK_RATE;
@@ -23,6 +33,7 @@ type WorldUpdatePayload = {
   tick: number;
   mapRevision: number;
   players: ReturnType<typeof buildPublicPlayersSnapshot>;
+  enemies: ReturnType<typeof buildPublicEnemiesSnapshot>;
   attacks: ReturnType<typeof buildPublicAttacksSnapshot>;
 };
 
@@ -33,6 +44,7 @@ export function emitWorldUpdate(io: SocketIOServer, tick: number): void {
     tick,
     mapRevision: obterMapRevision(), //visualizacao de mudancas no mapa
     players: buildPublicPlayersSnapshot(),
+    enemies: buildPublicEnemiesSnapshot(),
     attacks: buildPublicAttacksSnapshot(nowMs)
   };
 
@@ -60,10 +72,44 @@ export function startGameLoop(io: SocketIOServer): () => void {
     const attackHits = applyAttackDamage(now);
     const respawns = applyRespawns(now);
 
+    // Lógica de inimigos
+    const playerPositions = buildPublicPlayersSnapshot().map((p) => ({
+      characterId: p.id,
+      x: p.x,
+      y: p.y,
+      spawnedAtTime: now
+    }));
+    
+    const attackedByPlayerId = (enemyId: number): number | null => {
+      return getLastAttackerOfEnemy(enemyId);
+    };
+
+    updateEnemyTargets(playerPositions, attackedByPlayerId);
+    
+    // Criar mapa de players para acesso rápido
+    const playersByCharacterId = new Map(
+      buildPublicPlayersSnapshot().map((p) => [
+        p.id,
+        {
+          characterId: p.id,
+          x: p.x,
+          y: p.y,
+          hp: p.hp,
+          maxHp: p.maxHp,
+          name: p.name
+        }
+      ])
+    );
+
+    applyEnemyMovement(deltaSeconds, playerPositions, tileSolido);
+    const enemyHits = applyEnemyAttacks(now);
+    const enemyRespawns = applyEnemyRespawns(now);
+
     if (tick % LOOP_SUMMARY_INTERVAL_TICKS === 0 && movements.length > 0) {
       logInfo("LOOP", "Resumo tick", {
         tick,
         moving: movements.length,
+        enemies: getAllEnemies().length,
         dt: deltaSeconds.toFixed(3)
       });
     }
@@ -123,9 +169,41 @@ export function startGameLoop(io: SocketIOServer): () => void {
       }
     }
 
+    // Log de ataques de inimigos
+    for (const hit of enemyHits) {
+      logInfo("ENEMY_ATTACK", "Inimigo atacou", {
+        enemy: hit.enemyName,
+        target: hit.targetName,
+        amount: hit.damage,
+        targetHp: hit.targetHp,
+        dead: hit.targetDied
+      });
+
+      if (hit.targetDied) {
+        void appendSystemChatMessage(`${hit.targetName} foi derrotado por ${hit.enemyName}.`)
+          .then((deathMessage) => {
+            io.emit("chat:message", deathMessage);
+          })
+          .catch((error) => {
+            logError("CHAT", "Falha ao registrar mensagem de sistema", {
+              target: hit.targetName,
+              owner: hit.enemyName,
+              error: error instanceof Error ? error.message : "erro desconhecido"
+            });
+          });
+      }
+    }
+
     for (const respawn of respawns) {
       logInfo("RESPAWN", "Player reapareceu", {
         player: respawn.playerName,
+        pos: `(${respawn.x},${respawn.y})`
+      });
+    }
+
+    for (const respawn of enemyRespawns) {
+      logInfo("RESPAWN", "Inimigo reapareceu", {
+        enemy: respawn.enemyName,
         pos: `(${respawn.x},${respawn.y})`
       });
     }

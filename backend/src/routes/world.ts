@@ -20,9 +20,11 @@ import {
   serializarMapa,
   type PersistedMapData
 } from "../realtime/mapEditor.js";
+import { registerEnemySpawns } from "../realtime/enemies.js";
 import { listOnlineCharacterIds } from "../realtime/world.js";
 import { validarCorpoSalvarMapa } from "../schemas.js";
-
+import fs from "fs";
+import path from "path";  // used for image uploads
 type MapRecord = {
   id: number;
   mapKey: string;
@@ -51,6 +53,7 @@ function respostaMapa(record: MapRecord): {
     mapSize: number;
     objects: PersistedMapData["objects"];
     layers: PersistedMapData["layers"];
+    enemySpawns: PersistedMapData["enemySpawns"];
     updatedAt: string;
   };
 } {
@@ -62,6 +65,7 @@ function respostaMapa(record: MapRecord): {
       mapSize: record.mapSize,
       objects: parsedData.objects,
       layers: parsedData.layers,
+      enemySpawns: parsedData.enemySpawns || [],
       updatedAt: record.updatedAt.toISOString()
     }
   };
@@ -87,7 +91,9 @@ export const rotasMundo: FastifyPluginAsync = async (app) => {
   // Tecnico: Precarrega o mapa padrao para ativar colisao mesmo antes de algum update HTTP.
   // Crianca: Liga as paredes do mapa assim que o servidor sobe.
   const defaultMap = await obterOuCriarMapa(DEFAULT_MAP_KEY);
-  atualizarGradeSolida(parsearMapaSalvo(defaultMap.data));
+  const parsedMap = parsearMapaSalvo(defaultMap.data);
+  atualizarGradeSolida(parsedMap);
+  registerEnemySpawns(parsedMap.enemySpawns || []);
 
   app.get("/api/world/state", async (_request, reply) => {
     // Tecnico: Busca todos os personagens para snapshot inicial do mundo.
@@ -169,7 +175,8 @@ export const rotasMundo: FastifyPluginAsync = async (app) => {
           cropWidth: object.cropWidth ?? null,
           cropHeight: object.cropHeight ?? null
         })),
-        layers: parsedBody.data.layers
+        layers: parsedBody.data.layers,
+        enemySpawns: parsedBody.data.enemySpawns || []
       };
 
       const updatedMap = await prisma.gameMap.upsert({
@@ -190,8 +197,46 @@ export const rotasMundo: FastifyPluginAsync = async (app) => {
       });
 
       atualizarGradeSolida(mapData);
+      // sempre que o mapa muda precisamos atualizar os spawns em memória
+      registerEnemySpawns(mapData.enemySpawns || []);
       sinalizarMapaAtualizado();
       return reply.send(respostaMapa(updatedMap));
+    }
+  );
+
+  // Endpoint para upload de imagem de objeto/mapa. Recebe { name, dataUrl }
+  // escreve o arquivo em frontend/images/map e retorna a URL para uso no cliente.
+  app.post(
+    "/api/map/image",
+    async (request, reply) => {
+      try {
+        const body = request.body as { name?: unknown; dataUrl?: unknown };
+        const name = typeof body.name === "string" ? body.name.trim() : null;
+        const dataUrl = typeof body.dataUrl === "string" ? body.dataUrl.trim() : null;
+        if (!name || !dataUrl || !dataUrl.startsWith("data:")) {
+          reply.status(400).send({ error: "Payload invalido." });
+          return;
+        }
+
+        const match = dataUrl.match(/^data:(image\/[^;]+);base64,(.+)$/);
+        if (!match) {
+          reply.status(400).send({ error: "Formato de imagem invalido." });
+          return;
+        }
+        const mime = match[1];
+        const base64 = match[2];
+        const safeName = name.replace(/[^a-zA-Z0-9._-]/g, "_");
+        const filename = `${Date.now()}-${safeName}`;
+        const dir = path.join(process.cwd(), "frontend", "images", "map");
+        fs.mkdirSync(dir, { recursive: true });
+        const filepath = path.join(dir, filename);
+        fs.writeFileSync(filepath, Buffer.from(base64, "base64"));
+        const url = `/images/map/${filename}`;
+        return reply.send({ url });
+      } catch (error) {
+        console.error(error);
+        reply.status(500).send({ error: "Falha ao salvar imagem." });
+      }
     }
   );
 };
