@@ -57,11 +57,11 @@ export function useGameSocket(token: string | null, enabled: boolean) {
     socket.on("world:update", (payload) => {
       setWorld(payload);
     });
-
+     //MURYLLO
     socket.on("chat:history", (payload) => {
       setChatMessages(payload.messages);
     });
-
+    //MURYLLO
     socket.on("chat:message", (payload) => {
       setChatMessages((current) => {
         if (current.some((entry) => entry.id === payload.id)) {
@@ -101,7 +101,7 @@ export function useGameSocket(token: string | null, enabled: boolean) {
     if (!socket) {
       return;
     }
-
+    //ISABELA
     socket.emit("player:move", input);
   }, []);
 
@@ -110,7 +110,7 @@ export function useGameSocket(token: string | null, enabled: boolean) {
     if (!socket) {
       return;
     }
-
+    //ISABELA
     socket.emit(
       "atack",
       {
@@ -131,7 +131,7 @@ export function useGameSocket(token: string | null, enabled: boolean) {
     if (!socket) {
       return Promise.resolve({ ok: false, error: "Socket desconectado." });
     }
-
+    //MURYLLO
     return new Promise((resolve) => {
       socket.emit("chat:send", { text }, (ack) => {
         resolve(ack);

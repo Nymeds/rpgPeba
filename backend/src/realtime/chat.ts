@@ -14,7 +14,7 @@ const CHAT_IV_BYTES = 12;
 let chatHistory: ChatMessagePayload[] = [];
 let chatHistoryLoaded = false;
 let chatHistoryLoadPromise: Promise<void> | null = null;
-
+//CRIPTOGRAFIA EM HASH
 const chatCryptoKey = createHash("sha256").update(env.CHAT_CRYPTO_SECRET, "utf8").digest();
 
 type EncryptedMessage = {

@@ -110,6 +110,7 @@ export function startGameLoop(io: SocketIOServer): () => void {
       if (hit.targetDied) {
         void appendSystemChatMessage(`${hit.targetName} foi derrotado por ${hit.ownerName}.`)
           .then((deathMessage) => {
+             //MURYLLO
             io.emit("chat:message", deathMessage);
           })
           .catch((error) => {

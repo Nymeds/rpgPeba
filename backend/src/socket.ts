@@ -280,6 +280,7 @@ export async function registrarEventosSocket(app: FastifyInstance, io: SocketIOS
     const chatHistoryPayload = buildChatHistoryPayload();
 
     socket.emit("session:ready", sessionReadyPayload);
+     //MURYLLO
     socket.emit("chat:history", chatHistoryPayload);
     emitWorldUpdate(io, 0);
 
@@ -293,6 +294,7 @@ export async function registrarEventosSocket(app: FastifyInstance, io: SocketIOS
 
 
     //escutar de movimento do cliente
+    //ISABELA
     socket.on("player:move", (payload: unknown, confirmacao?: SocketAck) => {
       const parsedMove = validarPayloadMovimento(payload);
       if (!parsedMove.ok) {
@@ -328,6 +330,7 @@ export async function registrarEventosSocket(app: FastifyInstance, io: SocketIOS
       responder(confirmacao, true);
     });
     //escutar de ataque do cliente
+    //ISABELA
     socket.on("atack", (payload: unknown, confirmacao?: SocketAck) => {
       const parsedAtack = validarPayloadAtaque(payload);
       if (!parsedAtack.ok) {
@@ -364,7 +367,7 @@ export async function registrarEventosSocket(app: FastifyInstance, io: SocketIOS
 
       responder(confirmacao, true);
     });
-
+    //MURYLLO
     socket.on("chat:send", async (payload: unknown, confirmacao?: SocketAck) => {
       const parsedChat = parseChatPayload(payload);
       if (!parsedChat.ok) {
