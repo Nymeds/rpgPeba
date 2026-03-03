@@ -1,5 +1,5 @@
 # RPG Peba MMO (Prototipo)
-
+![alt text]({81FF9809-CA76-4247-AC03-238DC143C553}.png)
 Monorepo de um prototipo MMO 2D realtime com:
 
 - autenticacao JWT
