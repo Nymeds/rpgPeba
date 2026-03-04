@@ -21,6 +21,7 @@ import {
   removeOnlinePlayer,
   setPlayerInput
 } from "./realtime/world.js";
+import { handlePlayerChatForAi } from "./realtime/enemies.js";
 
 type JwtSessionPayload = {
   accountId: number;
@@ -383,6 +384,7 @@ export async function registrarEventosSocket(app: FastifyInstance, io: SocketIOS
       try {
         const message = await appendChatMessage(session.characterId, session.characterName, parsedChat.text);
         io.emit("chat:message", message);
+        handlePlayerChatForAi(session.characterId, session.characterName, message.text);
         responder(confirmacao, true);
 
         logInfo("CHAT", "Mensagem enviada", {

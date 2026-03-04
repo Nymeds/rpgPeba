@@ -71,6 +71,7 @@ export type PublicEnemy = {
   maxHp: number;
   enemyType: EnemyType;
   isAttacking: boolean;
+  isAiCompanion: boolean;
 };
 
 export type WorldUpdatePayload = {

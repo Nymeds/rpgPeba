@@ -653,7 +653,7 @@ export function damagePlayer(characterId: number, damage: number): { damageTaken
       player.hp = Math.max(0, player.hp - damage);
       const died = player.hp === 0;
       if (died) {
-        player.deadUntilMs = nowMs + RESPAWN_DELAY_MS;
+        player.deadUntilMs = Date.now() + RESPAWN_DELAY_MS;
         player.inputX = 0;
         player.inputY = 0;
       }
@@ -663,6 +663,37 @@ export function damagePlayer(characterId: number, damage: number): { damageTaken
   }
   return null; // Player não encontrado
 }
+
+export function healPlayer(
+  characterId: number,
+  amount: number
+): { healedAmount: number; newHp: number } | null {
+  for (const player of onlinePlayersBySocket.values()) {
+    if (player.characterId !== characterId) {
+      continue;
+    }
+
+    if (player.deadUntilMs !== null || player.hp <= 0) {
+      return null;
+    }
+
+    const hpBefore = player.hp;
+    player.hp = Math.min(player.maxHp, player.hp + Math.max(0, amount));
+    const healedAmount = player.hp - hpBefore;
+    if (healedAmount <= 0) {
+      return null;
+    }
+
+    player.dirtyState = true;
+    return {
+      healedAmount,
+      newHp: player.hp
+    };
+  }
+
+  return null;
+}
+
 export function getLastAttackerOfEnemy(enemyId: number): number | null {
   let mostRecentAttacker: { playerId: number; timestamp: number } | null = null;
 
@@ -693,3 +724,4 @@ export function buildPublicAttacksSnapshot(nowMs = Date.now()): PublicAttack[] {
     }))
     .sort((a, b) => a.id - b.id);
 }
+

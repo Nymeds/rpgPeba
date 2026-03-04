@@ -641,6 +641,17 @@ export default function App() {
                         className={player.id === selfPlayerId ? "mini-dot self" : "mini-dot"}
                       />
                     ))}
+                    {gameSocket.world.enemies
+                      .filter((enemy) => enemy.isAiCompanion)
+                      .map((enemy) => (
+                        <circle
+                          key={`ai-${enemy.id}`}
+                          cx={mapPercent(enemy.x, gameSocket.world?.mapSize ?? 1)}
+                          cy={mapPercent(enemy.y, gameSocket.world?.mapSize ?? 1)}
+                          r={2.6}
+                          className="mini-dot ai-enemy"
+                        />
+                      ))}
                   </svg>
                 ) : (
                   <p className="empty-text">Aguardando snapshot...</p>

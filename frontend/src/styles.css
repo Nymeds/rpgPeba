@@ -410,6 +410,12 @@ input:focus {
   stroke-width: 1;
 }
 
+.mini-dot.ai-enemy {
+  fill: #ff3d4f;
+  stroke: rgba(42, 8, 11, 0.95);
+  stroke-width: 0.8;
+}
+
 .session-panel p {
   margin: 8px 0;
   font-size: 0.92rem;

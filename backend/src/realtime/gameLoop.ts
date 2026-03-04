@@ -2,7 +2,7 @@ import { Server as SocketIOServer } from "socket.io";
 
 import { MAP_SIZE } from "../game.js";
 import { logError, logInfo } from "../logger.js";
-import { appendSystemChatMessage } from "./chat.js";
+import { appendChatMessage, appendSystemChatMessage } from "./chat.js";
 import { consumirSinalMapaAtualizado, obterMapRevision } from "./mapEditor.js";
 import {
   applyAttackDamage,
@@ -19,7 +19,9 @@ import {
   applyEnemyRespawns,
   buildPublicEnemiesSnapshot,
   updateEnemyTargets,
-  getAllEnemies
+  getAllEnemies,
+  consumePendingAiChatMessages,
+  tickAiCompanionDirector
 } from "./enemies.js";
 import { tileSolido } from "./mapEditor.js";
 
@@ -86,25 +88,11 @@ export function startGameLoop(io: SocketIOServer): () => void {
     };
 
     updateEnemyTargets(playerPositions, attackedByPlayerId);
-    
-    // Criar mapa de players para acesso rápido
-    const playersByCharacterId = new Map(
-      buildPublicPlayersSnapshot().map((p) => [
-        p.id,
-        {
-          characterId: p.id,
-          x: p.x,
-          y: p.y,
-          hp: p.hp,
-          maxHp: p.maxHp,
-          name: p.name
-        }
-      ])
-    );
-
+    tickAiCompanionDirector(now);
     applyEnemyMovement(deltaSeconds, playerPositions, tileSolido);
     const enemyHits = applyEnemyAttacks(now);
     const enemyRespawns = applyEnemyRespawns(now);
+    const aiChatMessages = consumePendingAiChatMessages(now);
 
     if (tick % LOOP_SUMMARY_INTERVAL_TICKS === 0 && movements.length > 0) {
       logInfo("LOOP", "Resumo tick", {
@@ -172,10 +160,20 @@ export function startGameLoop(io: SocketIOServer): () => void {
 
     // Log de ataques de inimigos
     for (const hit of enemyHits) {
+      if (hit.effect === "heal") {
+        logInfo("ENEMY_SUPPORT", "Companheiro curou player", {
+          enemy: hit.enemyName,
+          target: hit.targetName,
+          amount: hit.amount,
+          targetHp: hit.targetHp
+        });
+        continue;
+      }
+
       logInfo("ENEMY_ATTACK", "Inimigo atacou", {
         enemy: hit.enemyName,
         target: hit.targetName,
-        amount: hit.damage,
+        amount: hit.amount,
         targetHp: hit.targetHp,
         dead: hit.targetDied
       });
@@ -209,6 +207,19 @@ export function startGameLoop(io: SocketIOServer): () => void {
       });
     }
 
+    for (const message of aiChatMessages) {
+      void appendChatMessage(message.enemyId, message.enemyName, message.text)
+        .then((savedMessage) => {
+          io.emit("chat:message", savedMessage);
+        })
+        .catch((error) => {
+          logError("CHAT", "Falha ao persistir fala de companion", {
+            npc: message.enemyName,
+            error: error instanceof Error ? error.message : "erro desconhecido"
+          });
+        });
+    }
+
     const houveAtualizacaoMapa = consumirSinalMapaAtualizado();
     if (houveAtualizacaoMapa) {
       logInfo("MAP", "Mapa atualizado e broadcast solicitado");
@@ -224,3 +235,4 @@ export function startGameLoop(io: SocketIOServer): () => void {
     clearInterval(intervalHandle);
   };
 }
+

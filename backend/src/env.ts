@@ -38,6 +38,7 @@ export const env = {
   // Compatibilidade com arquivos antigos do projeto.
   DATABASE_URL: textoOuPadrao("DATABASE_URL", "file:./dev.db"),
   JWT_SECRET: textoOuPadrao("JWT_SECRET", "mmo-rpg-peba-segredo-min-16"),
+  IAKEY: textoOuPadrao("IAKEY", ""),
   // Segredo dedicado para proteger conteudo de chat em repouso.
   CHAT_CRYPTO_SECRET: textoOuPadrao("CHAT_CRYPTO_SECRET", textoOuPadrao("JWT_SECRET", "mmo-rpg-peba-segredo-min-16"))
 };
