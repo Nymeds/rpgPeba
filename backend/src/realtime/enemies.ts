@@ -1,5 +1,7 @@
-import { MAP_SIZE, SPAWN_POSITION, limitarAoMapa } from "../game.js";
-import { damagePlayer, buildPublicPlayersSnapshot } from "./world.js";
+import { MAP_SIZE, limitarAoMapa } from "../game.js";
+import { env } from "../env.js";
+import { logError, logInfo, logWarn } from "../logger.js";
+import { buildPublicPlayersSnapshot, damagePlayer, healPlayer } from "./world.js";
 import type { Direction } from "./types.js";
 
 const ENEMY_SPAWN_RADIUS = 10;
@@ -1433,6 +1435,7 @@ export function updateEnemyTargets(
 
       const now = Date.now();
       const lastAttackerId = attackedByPlayerId(enemy.id);
+<<<<<<< Updated upstream
 
       if (enemy.isAiCompanion) {
         if (lastAttackerId !== null) {
@@ -1452,6 +1455,24 @@ export function updateEnemyTargets(
           enemy.targetPlayerId = lastAttackerId;
           enemy.lastTargetChangeAtMs = now;
         }
+=======
+
+      if (enemy.isAiCompanion) {
+        if (lastAttackerId !== null) {
+          const relation = ensureRelationship(enemy.id, lastAttackerId);
+          if (now - relation.lastInteractionAtMs > 800) {
+            relation.aggression = clamp(relation.aggression + 3, 0, 100);
+            relation.lastInteractionAtMs = now;
+          }
+        }
+        updateAiTargeting(enemy, playerPositions);
+        continue;
+      }
+
+      if (lastAttackerId !== null) {
+        enemy.targetPlayerId = lastAttackerId;
+        enemy.lastTargetChangeAtMs = now;
+>>>>>>> Stashed changes
       }
 
       if (enemy.targetPlayerId !== null) {
@@ -1646,14 +1667,10 @@ export function applyEnemyMovement(
   }
 }
 
-export function applyEnemyAttacks(
-  nowMs = Date.now()
-): Array<{ enemyId: number; enemyName: string; targetId: number; targetName: string; damage: number; targetHp: number; targetDied: boolean }> {
-  const hits: Array<{ enemyId: number; enemyName: string; targetId: number; targetName: string; damage: number; targetHp: number; targetDied: boolean }> = [];
-  
-  // Carregar posições dos players para verificar distância
+export function applyEnemyAttacks(nowMs = Date.now()): EnemyAttackResult[] {
+  const hits: EnemyAttackResult[] = [];
   const playerSnapshots = buildPublicPlayersSnapshot();
-  const playerById = new Map(playerSnapshots.map((p) => [p.id, p]));
+  const playerById = new Map(playerSnapshots.map((player) => [player.id, player]));
 
   for (const enemies of DATA_BY_SPAWN.values()) {
     for (const enemy of enemies) {
