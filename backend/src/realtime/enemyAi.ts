@@ -92,6 +92,10 @@ export type PendingAiChatMessage = {
   enemyName: string;
   text: string;
 };
+function escolherAleatorio<T>(lista: T[]): T {
+  const index = Math.floor(Math.random() * lista.length);
+  return lista[index];
+}
 
 export type EnemyAiDirectorDependencies = {
   getAllEnemies: () => OnlineEnemyState[];
@@ -198,12 +202,14 @@ export class EnemyAiDirector {
 
     if (nowMs - enemy.lastAiInteractionAtMs > AI_INTERACT_COOLDOWN_MS) {
       enemy.lastAiInteractionAtMs = nowMs;
-      this.queueAiMessage(enemy.id, `${attackerName}, isso foi um erro.`, randomInt(300, 700));
+      const messages = ["Você escolheu errado","Você vai pagar","Bastardo!!!"]
+      this.queueAiMessage(enemy.id, `${attackerName}, ${escolherAleatorio(messages)}`, randomInt(300, 700));
     }
   }
 
   public queueCompanionDeathMessage(enemy: OnlineEnemyState): void {
-    this.queueAiMessage(enemy.id, "Eu volto em breve... isto nao acabou.", randomInt(250, 500));
+    const messages = ["Eu volto em breve... isto nao acabou. ","A morte não ira poupar voce!","Ao pó estou indo e dele voltarei"]
+    this.queueAiMessage(enemy.id, `${escolherAleatorio(messages)}`, randomInt(250, 500));
   }
 
   public handlePlayerChatForAi(playerId: number, playerName: string, text: string): void {
