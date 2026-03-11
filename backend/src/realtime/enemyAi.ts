@@ -1,5 +1,5 @@
 import { env } from "../env.js";
-import { logError, logInfo, logWarn } from "../logger.js";
+import { logError, logWarn } from "../logger.js";
 import type { AiDisposition, AiPersonaId, OnlineEnemyState } from "./enemies.js";
 
 const AI_CHAT_RADIUS = 5;
@@ -175,12 +175,6 @@ export class EnemyAiDirector {
   }
 
   public onCompanionsInitialized(companions: OnlineEnemyState[]): void {
-    logInfo("AI", "Companheiros IA iniciados", {
-      npc1: `${companions[0]?.name ?? "?"}(${companions[0]?.id ?? -1})`,
-      npc2: `${companions[1]?.name ?? "?"}(${companions[1]?.id ?? -1})`,
-      x: companions[0]?.x ?? -1,
-      y: companions[0]?.y ?? -1
-    });
   }
 
   public registerPlayerKill(playerId: number): void {
@@ -1047,13 +1041,6 @@ export class EnemyAiDirector {
         }
       }
 
-      logInfo("AI", "NPC respondeu jogador", {
-        npc: enemy.name,
-        player: player.name,
-        mood: enemy.aiDisposition,
-        trust: relation.trust,
-        aggression: relation.aggression
-      });
     } catch (error) {
       logError("AI", "Falha no processamento de chat do companion", {
         npc: enemy.name,

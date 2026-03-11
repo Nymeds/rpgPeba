@@ -50,6 +50,7 @@ export type OnlinePlayerState = {
   spawnedAtMs: number;
   lastAttackAtMs: number;
   dirtyState: boolean;
+  isGodMode: boolean;
 };
 
 export type MovementComputation = {
@@ -125,7 +126,7 @@ type ActiveAttackState = {
 
 type RegisterOnlinePlayerInput = Omit<
   OnlinePlayerState,
-  "inputX" | "inputY" | "facing" | "deadUntilMs" | "spawnedAtMs" | "lastAttackAtMs" | "dirtyState"
+  "inputX" | "inputY" | "facing" | "deadUntilMs" | "spawnedAtMs" | "lastAttackAtMs" | "dirtyState" | "isGodMode"
 >;
 
 const onlinePlayersBySocket = new Map<string, OnlinePlayerState>();
@@ -239,7 +240,8 @@ export function registerOnlinePlayer(input: RegisterOnlinePlayerInput): string |
     deadUntilMs: null,
     spawnedAtMs: nowMs,
     lastAttackAtMs: 0,
-    dirtyState: input.hp <= 0
+    dirtyState: input.hp <= 0,
+    isGodMode: false
   });
   socketByCharacterId.set(input.characterId, input.socketId);
 
@@ -649,6 +651,9 @@ export function damagePlayer(characterId: number, damage: number): { damageTaken
       if (player.deadUntilMs !== null || player.hp <= 0) {
         return null; // Já está morto
       }
+      if (player.isGodMode) {
+        return { damageTaken: 0, newHp: player.hp, died: false };
+      }
       const damageTaken = Math.min(damage, player.hp);
       player.hp = Math.max(0, player.hp - damage);
       const died = player.hp === 0;
@@ -662,6 +667,17 @@ export function damagePlayer(characterId: number, damage: number): { damageTaken
     }
   }
   return null; // Player não encontrado
+}
+
+export function toggleGodMode(characterId: number): boolean | null {
+  for (const player of onlinePlayersBySocket.values()) {
+    if (player.characterId !== characterId) {
+      continue;
+    }
+    player.isGodMode = !player.isGodMode;
+    return player.isGodMode;
+  }
+  return null;
 }
 
 export function healPlayer(
@@ -724,4 +740,5 @@ export function buildPublicAttacksSnapshot(nowMs = Date.now()): PublicAttack[] {
     }))
     .sort((a, b) => a.id - b.id);
 }
+
 

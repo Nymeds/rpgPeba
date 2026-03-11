@@ -7,11 +7,7 @@ import { logError, logInfo, logWarn } from "./logger.js";
 import { validarPayloadAtaque, validarPayloadMovimento } from "./schemas.js";
 import { appendChatMessage, buildChatHistoryPayload, initializeChatHistory } from "./realtime/chat.js";
 import { emitWorldUpdate, startGameLoop } from "./realtime/gameLoop.js";
-import type {
-  ChatSendPayload,
-  SessionReadyPayload,
-  SocketAck
-} from "./realtime/types.js";
+import type { ChatMessagePayload, ChatSendPayload, SessionReadyPayload, SocketAck } from "./realtime/types.js";
 import {
   collectDirtyStates,
   createPlayerAttack,
@@ -19,9 +15,10 @@ import {
   markPlayersAsDirty,
   registerOnlinePlayer,
   removeOnlinePlayer,
-  setPlayerInput
+  setPlayerInput,
+  toggleGodMode
 } from "./realtime/world.js";
-import { handlePlayerChatForAi } from "./realtime/enemies.js";
+import { forceNpcFormation, handlePlayerChatForAi } from "./realtime/enemies.js";
 
 type JwtSessionPayload = {
   accountId: number;
@@ -94,11 +91,6 @@ async function persistirPosicoesPendentes(app: FastifyInstance, motivo: string):
     return;
   }
 
-  logInfo("DB", "Persistindo posicoes", {
-    reason: motivo,
-    players: dirtyStates.length
-  });
-
   try {
     await prisma.$transaction(
       dirtyStates.map((state) =>
@@ -129,12 +121,6 @@ async function persistirPosicaoDesconexao(app: FastifyInstance, session: SocketS
     await prisma.character.update({
       where: { id: session.characterId },
       data: { x, y, hp: session.hp }
-    });
-    logInfo("DB", "Posicao final salva no disconnect", {
-      player: session.characterName,
-      charId: session.characterId,
-      x,
-      y
     });
   } catch (error) {
     logError("DB", "Falha ao salvar posicao final", {
@@ -227,12 +213,6 @@ export async function registrarEventosSocket(app: FastifyInstance, io: SocketIOS
 
       (socket.data as { session?: SocketSession }).session = session;
 
-      logInfo("AUTH", "Socket autenticado", {
-        socket: socket.id,
-        account: `${session.username}(${session.accountId})`,
-        character: `${session.characterName}(${session.characterId})`
-      });
-
       next();
     } catch (error) {
       logWarn("AUTH", "Falha na autenticacao do socket", {
@@ -321,13 +301,6 @@ export async function registrarEventosSocket(app: FastifyInstance, io: SocketIOS
         return;
       }
 
-      logInfo("INPUT", "Direcao recebida", {
-        player: session.characterName,
-        socket: socket.id,
-        input: `(${parsedMove.data.x.toFixed(2)},${parsedMove.data.y.toFixed(2)})`,
-        flow: "frontend.emit(player:move)->backend.on->setInput"
-      });
-
       responder(confirmacao, true);
     });
     //escutar de ataque do cliente
@@ -356,16 +329,6 @@ export async function registrarEventosSocket(app: FastifyInstance, io: SocketIOS
       }
       const created = createdResult.attack;
 
-      logInfo("ATACK", "Ataque criado", {
-        player: created.ownerName,
-        attackId: created.attackId,
-        kind: created.kind,
-        direction: `(${created.directionX.toFixed(2)},${created.directionY.toFixed(2)})`,
-        range: created.range,
-        attackPos: `(${created.x},${created.y})`,
-        radius: created.radius.toFixed(2)
-      });
-
       responder(confirmacao, true);
     });
     //MURYLLO
@@ -381,18 +344,56 @@ export async function registrarEventosSocket(app: FastifyInstance, io: SocketIOS
         return;
       }
 
+      const normalizedChat = parsedChat.text.trim().toLowerCase();
+      if (normalizedChat === "/god") {
+        const nextState = toggleGodMode(session.characterId);
+        if (nextState === null) {
+          responder(confirmacao, false, "Jogador nao encontrado para /god.");
+          return;
+        }
+        const nowMs = Date.now();
+        const systemMessage: ChatMessagePayload = {
+          id: nowMs,
+          playerId: 0,
+          playerName: "Sistema",
+          text: nextState ? "Modo deus ativado." : "Modo deus desativado.",
+          createdAt: nowMs
+        };
+        socket.emit("chat:message", systemMessage);
+        responder(confirmacao, true);
+        return;
+      }
+
+      if (normalizedChat.startsWith("/debugcommands")) {
+        const parts = normalizedChat.split(/\s+/);
+        const command = parts[1] ?? "";
+        const nowMs = Date.now();
+        let responseText = "Use /debugCommands parede ou /debugCommands ataque.";
+        if (command === "parede") {
+          const updated = forceNpcFormation("shield_wall");
+          responseText = `Formacao parede aplicada em ${updated} faccoes.`;
+        } else if (command === "ataque") {
+          const updated = forceNpcFormation("attack");
+          responseText = `Formacao ataque aplicada em ${updated} faccoes.`;
+        }
+        const systemMessage: ChatMessagePayload = {
+          id: nowMs,
+          playerId: 0,
+          playerName: "Sistema",
+          text: responseText,
+          createdAt: nowMs
+        };
+        socket.emit("chat:message", systemMessage);
+        responder(confirmacao, true);
+        return;
+      }
+
       try {
         const message = await appendChatMessage(session.characterId, session.characterName, parsedChat.text);
         io.emit("chat:message", message);
         handlePlayerChatForAi(session.characterId, session.characterName, message.text);
         responder(confirmacao, true);
 
-        logInfo("CHAT", "Mensagem enviada", {
-          player: session.characterName,
-          socket: socket.id,
-          messageId: message.id,
-          chars: message.text.length
-        });
       } catch (error) {
         responder(confirmacao, false, "Falha ao persistir mensagem no banco.");
         logError("CHAT", "Falha ao persistir mensagem de chat", {

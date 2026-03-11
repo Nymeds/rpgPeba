@@ -19,17 +19,16 @@ import {
   applyEnemyRespawns,
   buildPublicEnemiesSnapshot,
   updateEnemyTargets,
-  getAllEnemies,
   consumePendingAiChatMessages,
-  tickAiCompanionDirector
+  consumePendingNpcChatMessages,
+  tickAiCompanionDirector,
+  tickNpcChatter
 } from "./enemies.js";
 import { tileSolido } from "./mapEditor.js";
 
 const TICK_RATE = 20;
 const TICK_INTERVAL_MS = 1000 / TICK_RATE;
 const MOVE_SPEED_TILES_PER_SECOND = 3;
-const LOOP_LOG_INTERVAL_MS = 250;
-const LOOP_SUMMARY_INTERVAL_TICKS = TICK_RATE;
 
 type WorldUpdatePayload = {
   mapSize: number;
@@ -57,7 +56,6 @@ export function emitWorldUpdate(io: SocketIOServer, tick: number): void {
 export function startGameLoop(io: SocketIOServer): () => void {
   let tick = 0;
   let lastTickAt = Date.now();
-  const lastMovementLogAtBySocket = new Map<string, number>();
 
   logInfo("LOOP", "Iniciado", {
     tickRate: TICK_RATE,
@@ -89,63 +87,17 @@ export function startGameLoop(io: SocketIOServer): () => void {
 
     updateEnemyTargets(playerPositions, attackedByPlayerId);
     tickAiCompanionDirector(now);
+    tickNpcChatter(now);
     applyEnemyMovement(deltaSeconds, playerPositions, tileSolido);
     const enemyHits = applyEnemyAttacks(now);
     const enemyRespawns = applyEnemyRespawns(now);
     const aiChatMessages = consumePendingAiChatMessages(now);
-
-    if (tick % LOOP_SUMMARY_INTERVAL_TICKS === 0 && movements.length > 0) {
-      logInfo("LOOP", "Resumo tick", {
-        tick,
-        moving: movements.length,
-        enemies: getAllEnemies().length,
-        dt: deltaSeconds.toFixed(3)
-      });
-    }
-
-    for (const move of movements) {
-      const lastLogAt = lastMovementLogAtBySocket.get(move.socketId) ?? 0;
-      if (now - lastLogAt < LOOP_LOG_INTERVAL_MS) {
-        continue;
-      }
-      lastMovementLogAtBySocket.set(move.socketId, now);
-
-      logInfo("MOVE", "Movimento aplicado", {
-        player: move.playerName,
-        vector: `(${move.vectorX.toFixed(2)},${move.vectorY.toFixed(2)})`,
-        from: `(${move.fromX.toFixed(2)},${move.fromY.toFixed(2)})`,
-        to: `(${move.toX.toFixed(2)},${move.toY.toFixed(2)})`,
-        dt: move.deltaSeconds.toFixed(3)
-      });
-    }
+    const npcChatMessages = consumePendingNpcChatMessages(now);
 
     for (const hit of attackHits) {
-      if (hit.effect === "heal") {
-        logInfo("ATACK", "Cura aplicada", {
-          attackId: hit.attackId,
-          owner: hit.ownerName,
-          target: hit.targetName,
-          targetId: hit.targetCharacterId,
-          amount: hit.amount,
-          hpAfter: hit.hpAfter
-        });
-        continue;
-      }
-
-      logInfo("ATACK", "Dano aplicado", {
-        attackId: hit.attackId,
-        owner: hit.ownerName,
-        target: hit.targetName,
-        targetId: hit.targetCharacterId,
-        amount: hit.amount,
-        hpAfter: hit.hpAfter,
-        dead: hit.targetDied
-      });
-
       if (hit.targetDied) {
         void appendSystemChatMessage(`${hit.targetName} foi derrotado por ${hit.ownerName}.`)
           .then((deathMessage) => {
-             //MURYLLO
             io.emit("chat:message", deathMessage);
           })
           .catch((error) => {
@@ -158,56 +110,24 @@ export function startGameLoop(io: SocketIOServer): () => void {
       }
     }
 
-    // Log de ataques de inimigos
     for (const hit of enemyHits) {
-      if (hit.effect === "heal") {
-        logInfo("ENEMY_SUPPORT", "Companheiro curou player", {
-          enemy: hit.enemyName,
-          target: hit.targetName,
-          amount: hit.amount,
-          targetHp: hit.targetHp
-        });
+      if (!hit.targetDied) {
         continue;
       }
-
-      logInfo("ENEMY_ATTACK", "Inimigo atacou", {
-        enemy: hit.enemyName,
-        target: hit.targetName,
-        amount: hit.amount,
-        targetHp: hit.targetHp,
-        dead: hit.targetDied
-      });
-
-      if (hit.targetDied) {
-        void appendSystemChatMessage(`${hit.targetName} foi derrotado por ${hit.enemyName}.`)
-          .then((deathMessage) => {
-            io.emit("chat:message", deathMessage);
-          })
-          .catch((error) => {
-            logError("CHAT", "Falha ao registrar mensagem de sistema", {
-              target: hit.targetName,
-              owner: hit.enemyName,
-              error: error instanceof Error ? error.message : "erro desconhecido"
-            });
+      void appendSystemChatMessage(`${hit.targetName} foi derrotado por ${hit.enemyName}.`)
+        .then((deathMessage) => {
+          io.emit("chat:message", deathMessage);
+        })
+        .catch((error) => {
+          logError("CHAT", "Falha ao registrar mensagem de sistema", {
+            target: hit.targetName,
+            owner: hit.enemyName,
+            error: error instanceof Error ? error.message : "erro desconhecido"
           });
-      }
+        });
     }
 
-    for (const respawn of respawns) {
-      logInfo("RESPAWN", "Player reapareceu", {
-        player: respawn.playerName,
-        pos: `(${respawn.x},${respawn.y})`
-      });
-    }
-
-    for (const respawn of enemyRespawns) {
-      logInfo("RESPAWN", "Inimigo reapareceu", {
-        enemy: respawn.enemyName,
-        pos: `(${respawn.x},${respawn.y})`
-      });
-    }
-
-    for (const message of aiChatMessages) {
+    for (const message of [...aiChatMessages, ...npcChatMessages]) {
       void appendChatMessage(message.enemyId, message.enemyName, message.text)
         .then((savedMessage) => {
           io.emit("chat:message", savedMessage);
@@ -222,7 +142,6 @@ export function startGameLoop(io: SocketIOServer): () => void {
 
     const houveAtualizacaoMapa = consumirSinalMapaAtualizado();
     if (houveAtualizacaoMapa) {
-      logInfo("MAP", "Mapa atualizado e broadcast solicitado");
       emitWorldUpdate(io, tick);
     }
 

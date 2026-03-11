@@ -114,7 +114,9 @@ const enemySpawnSchema = z.object({
   x: z.number().int().min(0).max(MAP_SIZE - 1),
   y: z.number().int().min(0).max(MAP_SIZE - 1),
   enemyType: z.enum(["WARRIOR", "MONK"]),
-  spawnCount: z.number().int().min(1).max(10)
+  spawnCount: z.number().int().min(1).max(10),
+  warriorCount: z.number().int().min(0).max(10).optional(),
+  monkCount: z.number().int().min(0).max(10).optional()
 });
 
 const saveMapBodySchema = z.object({

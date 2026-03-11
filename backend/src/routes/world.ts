@@ -23,6 +23,7 @@ import {
 import { registerEnemySpawns } from "../realtime/enemies.js";
 import { listOnlineCharacterIds } from "../realtime/world.js";
 import { validarCorpoSalvarMapa } from "../schemas.js";
+import { logError } from "../logger.js";
 import fs from "fs";
 import path from "path";  // used for image uploads
 
@@ -267,7 +268,9 @@ export const rotasMundo: FastifyPluginAsync = async (app) => {
         const url = `/images/world/${filename}`;
         return reply.send({ url });
       } catch (error) {
-        console.error(error);
+        logError("MAP", "Falha ao salvar imagem", {
+          error: error instanceof Error ? error.message : "erro desconhecido"
+        });
         reply.status(500).send({ error: "Falha ao salvar imagem." });
       }
     }

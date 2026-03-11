@@ -12,7 +12,14 @@ import warriorIdleGif from "../../images/Warrior/idle.gif";
 import warriorRunGif from "../../images/Warrior/run.gif";
 import { API_URL } from "../api";
 import { setupInput } from "./input";
-import { PlayerType, type EnemyType, type GameMapDefinition, type MoveInput, type WorldUpdatePayload } from "../types";
+import {
+  EnemyType,
+  PlayerType,
+  type ChatMessagePayload,
+  type GameMapDefinition,
+  type MoveInput,
+  type WorldUpdatePayload
+} from "../types";
 
 const TILE_SIZE = 160;
 const PLAYER_INTERPOLATION_RATE = 16;
@@ -23,6 +30,8 @@ const ATTACK_AIM_GAP_PX = 50;
 const WARRIOR_ATTACK_VISUAL_MS = 400;
 const MONK_HEAL_VISUAL_MS = 1100;
 const MAP_TILE_OVERDRAW_PX = 1;
+const CHAT_BUBBLE_TTL_MS = 7000;
+const CHAT_BUBBLE_MAX_CHARS = 160;
 
 type CameraState = {
   x: number;
@@ -56,6 +65,7 @@ type RenderEnemy = {
   hp: number;
   maxHp: number;
   enemyType: EnemyType;
+  isFactionLeader: boolean;
   facing: "left" | "right";
   moving: boolean;
   hurtUntilMs: number;
@@ -88,6 +98,7 @@ type OverlayEnemy = {
   hp: number;
   maxHp: number;
   enemyType: EnemyType;
+  isFactionLeader: boolean;
   facing: "left" | "right";
   moving: boolean;
   hurt: boolean;
@@ -114,6 +125,7 @@ type GameCanvasProps = {
   onMove: (input: MoveInput) => void;
   onAttack?: (input: AttackAimInput) => void;
   showGrid?: boolean;
+  chatMessages: ChatMessagePayload[];
 };
 
 type DrawRect = {
@@ -235,20 +247,27 @@ function escolherSpriteGif(
 }
 
 function escolherGifInimigo(enemy: Pick<OverlayEnemy, "enemyType" | "moving" | "hurt" | "attacking">): string {
-  // Por enquanto, inimigos usam sempre os GIFs do Warrior
   if (enemy.attacking) {
-    return warriorAttack1Gif;
+    return enemy.enemyType === EnemyType.MONK ? monkAttack1Gif : warriorAttack1Gif;
   }
   if (enemy.hurt) {
-    return warriorHurtGif;
+    return enemy.enemyType === EnemyType.MONK ? monkIdleGif : warriorHurtGif;
   }
   if (enemy.moving) {
-    return warriorRunGif;
+    return enemy.enemyType === EnemyType.MONK ? monkRunGif : warriorRunGif;
   }
-  return warriorIdleGif;
+  return enemy.enemyType === EnemyType.MONK ? monkIdleGif : warriorIdleGif;
 }
 
-export default function GameCanvas({ world, mapDefinition, selfPlayerId, onMove, onAttack, showGrid = false }: GameCanvasProps) {
+export default function GameCanvas({
+  world,
+  mapDefinition,
+  selfPlayerId,
+  onMove,
+  onAttack,
+  showGrid = false,
+  chatMessages
+}: GameCanvasProps) {
   const mapShellRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const cameraRef = useRef<CameraState>({ x: 0, y: 0, initialized: false });
@@ -274,6 +293,7 @@ export default function GameCanvas({ world, mapDefinition, selfPlayerId, onMove,
   const [overlayHealEffects, setOverlayHealEffects] = useState<OverlayHealEffect[]>([]);
   const [aimLocked, setAimLocked] = useState(false);
   const [aimVector, setAimVector] = useState<{ x: number; y: number }>({ x: 1, y: 0 });
+  const [bubbleTick, setBubbleTick] = useState(0);
 
   // Sempre manter refs atualizadas sem re-registrar listeners
   worldRef.current = world;
@@ -297,6 +317,37 @@ export default function GameCanvas({ world, mapDefinition, selfPlayerId, onMove,
   }, [selfPlayerId, world]);
 
   const selfSprite = useMemo(() => overlaySprites.find((sprite) => sprite.self) ?? null, [overlaySprites]);
+
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      setBubbleTick((tick) => tick + 1);
+    }, 500);
+    return () => {
+      window.clearInterval(id);
+    };
+  }, []);
+
+  const activeChatById = useMemo(() => {
+    const map = new Map<number, ChatMessagePayload>();
+    const nowMs = Date.now();
+    for (let index = chatMessages.length - 1; index >= 0; index -= 1) {
+      const message = chatMessages[index];
+      if (message.playerId <= 0) {
+        continue;
+      }
+      if (nowMs - message.createdAt > CHAT_BUBBLE_TTL_MS) {
+        continue;
+      }
+      if (!map.has(message.playerId)) {
+        const trimmed =
+          message.text.length > CHAT_BUBBLE_MAX_CHARS
+            ? `${message.text.slice(0, CHAT_BUBBLE_MAX_CHARS - 1)}…`
+            : message.text;
+        map.set(message.playerId, { ...message, text: trimmed });
+      }
+    }
+    return map;
+  }, [chatMessages, bubbleTick]);
 
   const aimArrow = useMemo(() => {
     if (!aimLocked || !selfSprite) {
@@ -551,6 +602,7 @@ export default function GameCanvas({ world, mapDefinition, selfPlayerId, onMove,
             hp: enemy.hp,
             maxHp: enemy.maxHp,
             enemyType: enemy.enemyType,
+            isFactionLeader: enemy.isFactionLeader,
             facing: "right",
             moving: false,
             hurtUntilMs: 0,
@@ -565,6 +617,7 @@ export default function GameCanvas({ world, mapDefinition, selfPlayerId, onMove,
         existing.hp = enemy.hp;
         existing.maxHp = enemy.maxHp;
         existing.enemyType = enemy.enemyType;
+        existing.isFactionLeader = enemy.isFactionLeader;
         existing.targetX = enemy.x;
         existing.targetY = enemy.y;
         existing.attacking = enemy.isAttacking;
@@ -764,7 +817,6 @@ export default function GameCanvas({ world, mapDefinition, selfPlayerId, onMove,
         context.arc(centerX, centerY, radius, 0, Math.PI * 2);
         context.stroke();
       }
-      setOverlayHealEffects(nextHealEffects);
 
       const attackAnimations = attackAnimationByOwnerRef.current;
       const nextAttackPhaseTwoByOwner = nextAttackPhaseTwoByOwnerRef.current;
@@ -832,6 +884,7 @@ export default function GameCanvas({ world, mapDefinition, selfPlayerId, onMove,
       const enemySprites: OverlayEnemy[] = [];
       for (const enemy of renderedEnemies.values()) {
         const centerX = renderOffsetX + enemy.x * TILE_SIZE + TILE_SIZE / 2;
+        const centerY = renderOffsetY + enemy.y * TILE_SIZE + TILE_SIZE / 2;
         const floorY = renderOffsetY + enemy.y * TILE_SIZE + TILE_SIZE - 2;
         const spriteSize = TILE_SIZE;
         const drawX = Math.round(centerX - spriteSize / 2);
@@ -846,13 +899,25 @@ export default function GameCanvas({ world, mapDefinition, selfPlayerId, onMove,
           hp: enemy.hp,
           maxHp: enemy.maxHp,
           enemyType: enemy.enemyType,
+          isFactionLeader: enemy.isFactionLeader,
           facing: enemy.facing,
           moving: enemy.moving,
           hurt: nowMs <= enemy.hurtUntilMs,
           attacking: enemy.attacking
         });
+
+        if (enemy.enemyType === EnemyType.MONK && enemy.attacking) {
+          const effectSize = Math.round(TILE_SIZE * 1.4);
+          nextHealEffects.push({
+            id: 100000 + enemy.id,
+            left: Math.round(centerX - effectSize / 2),
+            top: Math.round(centerY - effectSize / 2),
+            size: effectSize
+          });
+        }
       }
       setOverlayEnemies(enemySprites);
+      setOverlayHealEffects(nextHealEffects);
 
       rafId = window.requestAnimationFrame(draw);
     };
@@ -917,6 +982,11 @@ export default function GameCanvas({ world, mapDefinition, selfPlayerId, onMove,
               height: sprite.size
             }}
           >
+            {activeChatById.has(sprite.id) ? (
+              <div className={`chat-bubble ${sprite.self ? "self" : ""}`}>
+                <span>{activeChatById.get(sprite.id)?.text}</span>
+              </div>
+            ) : null}
             <div className="player-sprite-health">
               <span style={{ width: `${healthPercent(sprite.hp, sprite.maxHp)}%` }} />
             </div>
@@ -939,6 +1009,12 @@ export default function GameCanvas({ world, mapDefinition, selfPlayerId, onMove,
               height: enemy.size
             }}
           >
+            {enemy.isFactionLeader ? <div className="leader-crown" aria-hidden="true" /> : null}
+            {activeChatById.has(enemy.id) ? (
+              <div className="chat-bubble npc">
+                <span>{activeChatById.get(enemy.id)?.text}</span>
+              </div>
+            ) : null}
             <div className="enemy-sprite-health">
               <span style={{ width: `${healthPercent(enemy.hp, enemy.maxHp)}%` }} />
             </div>

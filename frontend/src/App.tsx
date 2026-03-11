@@ -577,6 +577,7 @@ export default function App() {
                 onMove={gameSocket.sendMove}
                 onAttack={gameSocket.sendAttack}
                 showGrid={showGrid}
+                chatMessages={gameSocket.chatMessages}
               />
             </section>
 

@@ -1,4 +1,4 @@
-@import url("https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=Sora:wght@400;500;600&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=Press+Start+2P&family=Sora:wght@400;500;600&display=swap");
 
 :root {
   --site-0: #05080b;
@@ -590,6 +590,106 @@ input:focus {
     0 1px 0 rgba(0, 0, 0, 0.8),
     0 0 6px rgba(0, 0, 0, 0.8);
   white-space: nowrap;
+}
+
+.leader-crown {
+  position: absolute;
+  left: 50%;
+  top: -46px;
+  width: 26px;
+  height: 12px;
+  transform: translateX(-50%);
+  background: linear-gradient(180deg, #ffe39a, #f3b938);
+  border: 2px solid #6b4b00;
+  border-radius: 2px;
+  box-shadow:
+    0 2px 0 rgba(0, 0, 0, 0.35),
+    0 0 6px rgba(255, 215, 120, 0.6);
+  clip-path: polygon(
+    0 100%,
+    0 55%,
+    18% 55%,
+    26% 0,
+    40% 55%,
+    50% 20%,
+    60% 55%,
+    74% 0,
+    82% 55%,
+    100% 55%,
+    100% 100%
+  );
+  z-index: 3;
+  pointer-events: none;
+}
+
+.chat-bubble {
+  position: absolute;
+  left: 50%;
+  bottom: 100%;
+  transform: translate(-50%, -20px);
+  max-width: 240px;
+  padding: 6px 8px 7px;
+  background: rgba(15, 24, 34, 0.92);
+  color: #f7fbff;
+  border: 2px solid #0b1118;
+  box-shadow:
+    0 0 0 2px rgba(245, 249, 255, 0.85),
+    0 10px 20px rgba(4, 8, 12, 0.45);
+  font-family: "Press Start 2P", "Rajdhani", sans-serif;
+  font-size: 9px;
+  line-height: 1.45;
+  text-align: center;
+  letter-spacing: 0.02em;
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.75);
+  word-break: break-word;
+  image-rendering: pixelated;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.chat-bubble::after {
+  content: "";
+  position: absolute;
+  left: 24px;
+  bottom: -6px;
+  width: 10px;
+  height: 10px;
+  background: rgba(15, 24, 34, 0.92);
+  border-right: 2px solid #0b1118;
+  border-bottom: 2px solid #0b1118;
+  transform: translateX(-50%) rotate(45deg);
+  box-shadow: 2px 2px 0 0 rgba(245, 249, 255, 0.85);
+}
+
+.chat-bubble.self {
+  background: rgba(12, 32, 20, 0.92);
+  border-color: #0b1a12;
+  box-shadow:
+    0 0 0 2px rgba(101, 255, 144, 0.8),
+    0 10px 20px rgba(4, 12, 8, 0.45);
+}
+
+.chat-bubble.self::after {
+  background: rgba(12, 32, 20, 0.92);
+  border-right-color: #0b1a12;
+  border-bottom-color: #0b1a12;
+  box-shadow: 2px 2px 0 0 rgba(101, 255, 144, 0.8);
+}
+
+.chat-bubble.npc {
+  background: rgba(36, 16, 20, 0.92);
+  border-color: #1f0e12;
+  color: #ffd2d8;
+  box-shadow:
+    0 0 0 2px rgba(255, 165, 176, 0.7),
+    0 10px 20px rgba(12, 4, 6, 0.45);
+}
+
+.chat-bubble.npc::after {
+  background: rgba(36, 16, 20, 0.92);
+  border-right-color: #1f0e12;
+  border-bottom-color: #1f0e12;
+  box-shadow: 2px 2px 0 0 rgba(255, 165, 176, 0.7);
 }
 
 .map-hud {

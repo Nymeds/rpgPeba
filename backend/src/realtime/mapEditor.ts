@@ -172,7 +172,9 @@ function normalizarMapa(rawMap: unknown): PersistedMapData {
       x: normalizarNumeroInteiro(spawn.x, 0, 79, 0),
       y: normalizarNumeroInteiro(spawn.y, 0, 79, 0),
       enemyType: (spawn.enemyType === "MONK" ? "MONK" : "WARRIOR") as "WARRIOR" | "MONK",
-      spawnCount: normalizarNumeroInteiro(spawn.spawnCount, 1, 10, 1)
+      spawnCount: normalizarNumeroInteiro(spawn.spawnCount, 1, 10, 1),
+      warriorCount: normalizarNumeroInteiro(spawn.warriorCount, 0, 10, 0),
+      monkCount: normalizarNumeroInteiro(spawn.monkCount, 0, 10, 0)
     });
   }
 

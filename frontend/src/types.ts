@@ -72,6 +72,7 @@ export type PublicEnemy = {
   enemyType: EnemyType;
   isAttacking: boolean;
   isAiCompanion: boolean;
+  isFactionLeader: boolean;
 };
 
 export type WorldUpdatePayload = {
@@ -142,6 +143,8 @@ export type EnemySpawnDefinition = {
   y: number;
   enemyType: "WARRIOR" | "MONK";
   spawnCount: number;
+  warriorCount?: number;
+  monkCount?: number;
 };
 
 export type SocketAck = (response: { ok: boolean; error?: string }) => void;

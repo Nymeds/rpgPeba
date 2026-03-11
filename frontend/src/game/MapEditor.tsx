@@ -170,6 +170,9 @@ export default function MapEditor({ map, onSave, onClose }: MapEditorProps) {
   const [newEnemySpawnY, setNewEnemySpawnY] = useState(40);
   const [newEnemySpawnType, setNewEnemySpawnType] = useState<"WARRIOR" | "MONK">("WARRIOR");
   const [newEnemySpawnCount, setNewEnemySpawnCount] = useState(1);
+  const [newEnemySpawnMixed, setNewEnemySpawnMixed] = useState(false);
+  const [newEnemySpawnWarriorCount, setNewEnemySpawnWarriorCount] = useState(5);
+  const [newEnemySpawnMonkCount, setNewEnemySpawnMonkCount] = useState(4);
   const [newEnemySpawnName, setNewEnemySpawnName] = useState("Spawn Inimigo");
 
   // Estados para zoom e pan (deslocamento)
@@ -1309,7 +1312,12 @@ export default function MapEditor({ map, onSave, onClose }: MapEditorProps) {
       x: Math.max(0, Math.min(79, newEnemySpawnX)),
       y: Math.max(0, Math.min(79, newEnemySpawnY)),
       enemyType: newEnemySpawnType,
-      spawnCount: Math.max(1, Math.min(10, newEnemySpawnCount))
+      spawnCount: Math.max(
+        1,
+        Math.min(10, newEnemySpawnMixed ? newEnemySpawnWarriorCount + newEnemySpawnMonkCount : newEnemySpawnCount)
+      ),
+      warriorCount: newEnemySpawnMixed ? Math.max(0, Math.min(10, newEnemySpawnWarriorCount)) : undefined,
+      monkCount: newEnemySpawnMixed ? Math.max(0, Math.min(10, newEnemySpawnMonkCount)) : undefined
     };
 
     setDraft((current) => ({
@@ -1667,24 +1675,35 @@ export default function MapEditor({ map, onSave, onClose }: MapEditorProps) {
                   </button>
                 </div>
                 <div className="map-editor-list">
-                  {draft.enemySpawns && draft.enemySpawns.map((spawn) => (
-                    <article key={spawn.id} className={`map-editor-spawn ${spawn.id === activeEnemySpawnId ? "active" : ""}`}>
-                      <div>
-                        <strong>{spawn.name}</strong>
-                        <small>
-                          Pos: ({spawn.x}, {spawn.y}) | Tipo: {spawn.enemyType} | Qty: {spawn.spawnCount}
-                        </small>
-                      </div>
-                      <div className="map-editor-spawn-actions">
-                        <button type="button" className="btn-ghost" onClick={() => setActiveEnemySpawnId(spawn.id)}>
-                          editar
-                        </button>
-                        <button type="button" className="btn-ghost" onClick={() => removeEnemySpawn(spawn.id)}>
-                          x
-                        </button>
-                      </div>
-                    </article>
-                  ))}
+                  {draft.enemySpawns &&
+                    draft.enemySpawns.map((spawn) => {
+                      const mixedTotal = (spawn.warriorCount ?? 0) + (spawn.monkCount ?? 0);
+                      const mixLabel =
+                        mixedTotal > 0
+                          ? `Misto: ${spawn.warriorCount ?? 0}K / ${spawn.monkCount ?? 0}M`
+                          : `Tipo: ${spawn.enemyType} | Qty: ${spawn.spawnCount}`;
+                      return (
+                        <article
+                          key={spawn.id}
+                          className={`map-editor-spawn ${spawn.id === activeEnemySpawnId ? "active" : ""}`}
+                        >
+                          <div>
+                            <strong>{spawn.name}</strong>
+                            <small>
+                              Pos: ({spawn.x}, {spawn.y}) | {mixLabel}
+                            </small>
+                          </div>
+                          <div className="map-editor-spawn-actions">
+                            <button type="button" className="btn-ghost" onClick={() => setActiveEnemySpawnId(spawn.id)}>
+                              editar
+                            </button>
+                            <button type="button" className="btn-ghost" onClick={() => removeEnemySpawn(spawn.id)}>
+                              x
+                            </button>
+                          </div>
+                        </article>
+                      );
+                    })}
                 </div>
               </section>
 
@@ -1716,27 +1735,63 @@ export default function MapEditor({ map, onSave, onClose }: MapEditorProps) {
                     />
                   </label>
                 </div>
-                <label>
-                  Tipo de Inimigo
-                  <select value={newEnemySpawnType} onChange={(event) => setNewEnemySpawnType(event.target.value as "WARRIOR" | "MONK")}>
-                    <option value="WARRIOR">Warrior</option>
-                    <option value="MONK">Monk</option>
-                  </select>
-                </label>
-                <label>
-                  Quantidade de Inimigos
-                  <input
-                    type="number"
-                    min={1}
-                    max={10}
-                    value={newEnemySpawnCount}
-                    onChange={(event) => setNewEnemySpawnCount(Math.max(1, Math.min(10, Number(event.target.value))))}
-                  />
-                </label>
-                <button type="button" className="btn-primary" onClick={addEnemySpawn}>
-                  Adicionar Spawn
-                </button>
-              </section>
+                  <label>
+                    Tipo de Inimigo
+                    <select value={newEnemySpawnType} onChange={(event) => setNewEnemySpawnType(event.target.value as "WARRIOR" | "MONK")}>
+                      <option value="WARRIOR">Warrior</option>
+                      <option value="MONK">Monk</option>
+                    </select>
+                  </label>
+                  <label>
+                    Quantidade de Inimigos
+                    <input
+                      type="number"
+                      min={1}
+                      max={10}
+                      value={newEnemySpawnCount}
+                      onChange={(event) => setNewEnemySpawnCount(Math.max(1, Math.min(10, Number(event.target.value))))}
+                    />
+                  </label>
+                  <label className="inline-check">
+                    <input
+                      type="checkbox"
+                      checked={newEnemySpawnMixed}
+                      onChange={(event) => setNewEnemySpawnMixed(event.target.checked)}
+                    />
+                    Spawn misto
+                  </label>
+                  {newEnemySpawnMixed ? (
+                    <>
+                      <label>
+                        Knights
+                        <input
+                          type="number"
+                          min={0}
+                          max={10}
+                          value={newEnemySpawnWarriorCount}
+                          onChange={(event) =>
+                            setNewEnemySpawnWarriorCount(Math.max(0, Math.min(10, Number(event.target.value))))
+                          }
+                        />
+                      </label>
+                      <label>
+                        Monks
+                        <input
+                          type="number"
+                          min={0}
+                          max={10}
+                          value={newEnemySpawnMonkCount}
+                          onChange={(event) =>
+                            setNewEnemySpawnMonkCount(Math.max(0, Math.min(10, Number(event.target.value))))
+                          }
+                        />
+                      </label>
+                    </>
+                  ) : null}
+                  <button type="button" className="btn-primary" onClick={addEnemySpawn}>
+                    Adicionar Spawn
+                  </button>
+                </section>
 
               {activeEnemySpawn && (
                 <section className="map-editor-block">
@@ -1810,6 +1865,68 @@ export default function MapEditor({ map, onSave, onClose }: MapEditorProps) {
                       }
                     />
                   </label>
+                  <label className="inline-check">
+                    <input
+                      type="checkbox"
+                      checked={(activeEnemySpawn.warriorCount ?? 0) + (activeEnemySpawn.monkCount ?? 0) > 0}
+                      onChange={(event) =>
+                        updateEnemySpawn(activeEnemySpawn.id, (spawn) => {
+                          if (event.target.checked) {
+                            spawn.warriorCount = Math.max(0, Math.min(10, spawn.warriorCount ?? 5));
+                            spawn.monkCount = Math.max(0, Math.min(10, spawn.monkCount ?? 4));
+                            spawn.spawnCount = Math.max(
+                              1,
+                              Math.min(10, (spawn.warriorCount ?? 0) + (spawn.monkCount ?? 0))
+                            );
+                          } else {
+                            spawn.warriorCount = undefined;
+                            spawn.monkCount = undefined;
+                          }
+                        })
+                      }
+                    />
+                    Spawn misto
+                  </label>
+                  {(activeEnemySpawn.warriorCount ?? 0) + (activeEnemySpawn.monkCount ?? 0) > 0 ? (
+                    <>
+                      <label>
+                        Knights
+                        <input
+                          type="number"
+                          min={0}
+                          max={10}
+                          value={activeEnemySpawn.warriorCount ?? 0}
+                          onChange={(event) =>
+                            updateEnemySpawn(activeEnemySpawn.id, (spawn) => {
+                              spawn.warriorCount = Math.max(0, Math.min(10, Number(event.target.value)));
+                              spawn.spawnCount = Math.max(
+                                1,
+                                Math.min(10, (spawn.warriorCount ?? 0) + (spawn.monkCount ?? 0))
+                              );
+                            })
+                          }
+                        />
+                      </label>
+                      <label>
+                        Monks
+                        <input
+                          type="number"
+                          min={0}
+                          max={10}
+                          value={activeEnemySpawn.monkCount ?? 0}
+                          onChange={(event) =>
+                            updateEnemySpawn(activeEnemySpawn.id, (spawn) => {
+                              spawn.monkCount = Math.max(0, Math.min(10, Number(event.target.value)));
+                              spawn.spawnCount = Math.max(
+                                1,
+                                Math.min(10, (spawn.warriorCount ?? 0) + (spawn.monkCount ?? 0))
+                              );
+                            })
+                          }
+                        />
+                      </label>
+                    </>
+                  ) : null}
                 </section>
               )}
             </>
