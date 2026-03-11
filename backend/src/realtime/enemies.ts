@@ -25,8 +25,9 @@ const ENEMY_ATTACK_DAMAGE = 20;
 const ENEMY_ATTACK_ANIMATION_MS = 400;
 const MONK_SUPPORT_HEAL_AMOUNT = 14;
 const MONK_SUPPORT_COOLDOWN_MS = 1200;
-const NPC_FACTION_MIN_COUNT = 10;
+const NPC_FACTION_MIN_COUNT = 5;
 const NPC_FACTION_SIZE = 9;
+const NPC_FACTION_CLUSTER_RADIUS = 6.4;
 const NPC_FACTION_FOLLOW_RADIUS = 10.2;
 const NPC_FACTION_GUARD_RADIUS = 1.3;
 const NPC_FACTION_LEASH_EXTRA = 2.6;
@@ -61,10 +62,16 @@ const NPC_FORMATION_ATTACK_DISTANCE = 1.9;
 const NPC_FORMATION_MONK_BACK_OFFSET = 1.2;
 const NPC_FORMATION_LEADER_BACK_OFFSET = 2.1;
 const NPC_FORMATION_LINE_SPACING = 0.8;
-const NPC_FORMATION_SLOT_SEARCH_RADIUS = 3;
+const NPC_FORMATION_SLOT_SEARCH_RADIUS = 4;
+const NPC_FORMATION_SLOT_HOLD_RADIUS = 0.28;
+const NPC_FORMATION_SLOT_SLOW_RADIUS = 1.1;
+const NPC_FORMATION_ANCHOR_UPDATE_MS = 350;
+const NPC_FORMATION_ANCHOR_MOVE_THRESHOLD = 0.6;
+const NPC_FORMATION_ANCHOR_LERP = 0.32;
+const NPC_FORMATION_SHIELD_LERP = 0.18;
 const NPC_LEADER_SPEED_MULT = 0.75;
-const NPC_LEADER_CHASE_DISTANCE = 2.6;
-const NPC_LEADER_CHASE_BAND = 0.4;
+const NPC_LEADER_CHASE_DISTANCE = 4.4;
+const NPC_LEADER_CHASE_BAND = 0.6;
 
 export type EnemyType = "WARRIOR" | "MONK";
 export type AiDisposition = "friendly" | "neutral" | "hostile";
@@ -157,6 +164,11 @@ type NpcFaction = {
   formationMode: NpcFormationMode;
   formationUntilMs: number;
   lastCommandAtMs: number;
+  formationAnchorX: number;
+  formationAnchorY: number;
+  formationAnchorTargetX: number;
+  formationAnchorTargetY: number;
+  formationAnchorUpdatedAtMs: number;
 };
 
 type QueuedNpcChatMessage = {
@@ -195,6 +207,23 @@ function normalizeVector(x: number, y: number): { x: number; y: number; length: 
     x: x / length,
     y: y / length,
     length
+  };
+}
+
+function lerp(from: number, to: number, t: number): number {
+  return from + (to - from) * t;
+}
+
+function computeFormationFrontCenter(
+  leader: OnlineEnemyState,
+  target: { x: number; y: number },
+  mode: NpcFormationMode
+): { x: number; y: number } {
+  const backDir = normalizeVector(leader.x - target.x, leader.y - target.y);
+  const baseDistance = mode === "shield_wall" ? NPC_FORMATION_SAFE_DISTANCE : NPC_FORMATION_ATTACK_DISTANCE;
+  return {
+    x: target.x + backDir.x * baseDistance,
+    y: target.y + backDir.y * baseDistance
   };
 }
 
@@ -341,33 +370,79 @@ function assignNpcFactions(enemies: OnlineEnemyState[]): void {
     enemy.factionId = null;
   }
 
-  if (enemies.length <= NPC_FACTION_MIN_COUNT) {
+  const candidates = enemies.filter((enemy) => !enemy.isAiCompanion && enemy.deadUntilMs === null && enemy.hp > 0);
+  if (candidates.length < NPC_FACTION_MIN_COUNT) {
     return;
   }
 
-  const shuffled = [...enemies];
-  shuffleInPlace(shuffled);
+  const byId = new Map(candidates.map((enemy) => [enemy.id, enemy]));
+  const unassigned = new Set(candidates.map((enemy) => enemy.id));
+  const clusters: OnlineEnemyState[][] = [];
 
-  for (let i = 0; i < shuffled.length; i += NPC_FACTION_SIZE) {
-    const members = shuffled.slice(i, i + NPC_FACTION_SIZE);
-    if (members.length === 0) {
+  for (const enemy of candidates) {
+    if (!unassigned.has(enemy.id)) {
       continue;
     }
-    const leader = randomFrom(members);
-    const behavior: NpcFactionBehavior = Math.random() < 0.5 ? "aggressive" : "neutral";
-    const factionId = nextFactionId++;
-    NPC_FACTIONS.set(factionId, {
-      id: factionId,
-      memberIds: members.map((member) => member.id),
-      leaderId: leader.id,
-      behavior,
-      targetPlayerId: null,
-      formationMode: "attack",
-      formationUntilMs: 0,
-      lastCommandAtMs: 0
-    });
-    for (const member of members) {
-      member.factionId = factionId;
+    const queue: OnlineEnemyState[] = [enemy];
+    unassigned.delete(enemy.id);
+    const cluster: OnlineEnemyState[] = [];
+
+    while (queue.length > 0) {
+      const current = queue.pop();
+      if (!current) {
+        break;
+      }
+      cluster.push(current);
+      for (const otherId of Array.from(unassigned)) {
+        const other = byId.get(otherId);
+        if (!other) {
+          continue;
+        }
+        const dist = Math.hypot(other.x - current.x, other.y - current.y);
+        if (dist <= NPC_FACTION_CLUSTER_RADIUS) {
+          unassigned.delete(otherId);
+          queue.push(other);
+        }
+      }
+    }
+
+    clusters.push(cluster);
+  }
+
+  const nowMs = Date.now();
+  for (const cluster of clusters) {
+    if (cluster.length < NPC_FACTION_MIN_COUNT) {
+      continue;
+    }
+    const shuffled = [...cluster];
+    shuffleInPlace(shuffled);
+
+    for (let i = 0; i < shuffled.length; i += NPC_FACTION_SIZE) {
+      const members = shuffled.slice(i, i + NPC_FACTION_SIZE);
+      if (members.length === 0) {
+        continue;
+      }
+      const leader = randomFrom(members);
+      const behavior: NpcFactionBehavior = Math.random() < 0.5 ? "aggressive" : "neutral";
+      const factionId = nextFactionId++;
+      NPC_FACTIONS.set(factionId, {
+        id: factionId,
+        memberIds: members.map((member) => member.id),
+        leaderId: leader.id,
+        behavior,
+        targetPlayerId: null,
+        formationMode: "attack",
+        formationUntilMs: 0,
+        lastCommandAtMs: 0,
+        formationAnchorX: leader.x,
+        formationAnchorY: leader.y,
+        formationAnchorTargetX: leader.x,
+        formationAnchorTargetY: leader.y,
+        formationAnchorUpdatedAtMs: nowMs
+      });
+      for (const member of members) {
+        member.factionId = factionId;
+      }
     }
   }
 }
@@ -398,6 +473,11 @@ function refreshFactionLeaders(nowMs: number, enemiesById: Map<number, OnlineEne
     faction.formationMode = "attack";
     faction.formationUntilMs = 0;
     faction.lastCommandAtMs = nowMs;
+    faction.formationAnchorX = nextLeader.x;
+    faction.formationAnchorY = nextLeader.y;
+    faction.formationAnchorTargetX = nextLeader.x;
+    faction.formationAnchorTargetY = nextLeader.y;
+    faction.formationAnchorUpdatedAtMs = nowMs;
   }
 }
 
@@ -442,6 +522,8 @@ function refreshFactionFormations(
       continue;
     }
 
+    const previousMode = faction.formationMode;
+    const previousTarget = faction.targetPlayerId;
     let targetPlayer: { characterId: number; x: number; y: number } | null = null;
     const factionAggro = NPC_FACTION_AGGRO_BY_ID.get(faction.id) ?? null;
     if (factionAggro && factionAggro.untilMs > nowMs) {
@@ -497,12 +579,26 @@ function refreshFactionFormations(
       faction.formationMode = "shield_wall";
       faction.formationUntilMs = nowMs + NPC_FORMATION_SHIELD_DURATION_MS;
       faction.lastCommandAtMs = nowMs;
+      if (previousMode !== faction.formationMode) {
+        queueNpcChat(leader.id, "PAREDE DE ESCUDOS!", randomInt(200, 350));
+        applyNpcPause(leader, nowMs, 18);
+      }
+      const anchor = computeFormationFrontCenter(leader, targetPlayer, faction.formationMode);
+      faction.formationAnchorX = anchor.x;
+      faction.formationAnchorY = anchor.y;
+      faction.formationAnchorTargetX = targetPlayer.x;
+      faction.formationAnchorTargetY = targetPlayer.y;
+      faction.formationAnchorUpdatedAtMs = nowMs;
       continue;
     }
     if (recentHits.length > 0) {
       faction.formationMode = "chase";
       faction.formationUntilMs = nowMs + NPC_FORMATION_CHASE_ON_HIT_MS;
       faction.lastCommandAtMs = nowMs;
+      if (previousMode !== faction.formationMode) {
+        queueNpcChat(leader.id, "AVANCAR!", randomInt(200, 350));
+        applyNpcPause(leader, nowMs, 8);
+      }
       continue;
     }
 
@@ -511,12 +607,29 @@ function refreshFactionFormations(
       faction.formationMode = "chase";
       faction.formationUntilMs = nowMs + NPC_FORMATION_REEVAL_MS * 2;
       faction.lastCommandAtMs = nowMs;
+      if (previousMode !== faction.formationMode) {
+        queueNpcChat(leader.id, "FORMACAO DE ATAQUE!", randomInt(200, 350));
+        applyNpcPause(leader, nowMs, 18);
+      }
       continue;
     }
 
     faction.formationMode = "attack";
     faction.formationUntilMs = 0;
     faction.lastCommandAtMs = nowMs;
+
+    if (previousMode !== faction.formationMode || previousTarget !== faction.targetPlayerId) {
+      if (previousMode !== faction.formationMode) {
+        queueNpcChat(leader.id, "FORMACAO DE ATAQUE!", randomInt(200, 350));
+        applyNpcPause(leader, nowMs, 18);
+      }
+      const anchor = computeFormationFrontCenter(leader, targetPlayer, faction.formationMode);
+      faction.formationAnchorX = anchor.x;
+      faction.formationAnchorY = anchor.y;
+      faction.formationAnchorTargetX = targetPlayer.x;
+      faction.formationAnchorTargetY = targetPlayer.y;
+      faction.formationAnchorUpdatedAtMs = nowMs;
+    }
   }
 }
 
@@ -579,13 +692,15 @@ function findNearestValidPosition(
   x: number,
   y: number,
   maxRadius: number,
-  tileSolido: (x: number, y: number) => boolean
+  tileSolido: (x: number, y: number) => boolean,
+  occupied?: Set<string>
 ): { x: number; y: number } {
   const baseX = clamp(x, 1, MAP_SIZE - 2);
   const baseY = clamp(y, 1, MAP_SIZE - 2);
   const roundedX = Math.round(baseX);
   const roundedY = Math.round(baseY);
-  if (!tileSolido(roundedX, roundedY)) {
+  const baseKey = `${roundedX},${roundedY}`;
+  if (!tileSolido(roundedX, roundedY) && (!occupied || !occupied.has(baseKey))) {
     return { x: baseX, y: baseY };
   }
 
@@ -604,7 +719,8 @@ function findNearestValidPosition(
   for (const offset of offsets) {
     const candidateX = clamp(baseX + offset.dx, 1, MAP_SIZE - 2);
     const candidateY = clamp(baseY + offset.dy, 1, MAP_SIZE - 2);
-    if (!tileSolido(Math.round(candidateX), Math.round(candidateY))) {
+    const tileKey = `${Math.round(candidateX)},${Math.round(candidateY)}`;
+    if (!tileSolido(Math.round(candidateX), Math.round(candidateY)) && (!occupied || !occupied.has(tileKey))) {
       return { x: candidateX, y: candidateY };
     }
   }
@@ -748,6 +864,12 @@ export function forceNpcFormation(mode: "shield_wall" | "attack"): number {
     faction.formationUntilMs =
       mode === "shield_wall" ? nowMs + NPC_FORMATION_SHIELD_DURATION_MS : nowMs + NPC_FORMATION_REEVAL_MS * 2;
     faction.lastCommandAtMs = nowMs;
+    const anchor = computeFormationFrontCenter(leader, nearest, mode);
+    faction.formationAnchorX = anchor.x;
+    faction.formationAnchorY = anchor.y;
+    faction.formationAnchorTargetX = nearest.x;
+    faction.formationAnchorTargetY = nearest.y;
+    faction.formationAnchorUpdatedAtMs = nowMs;
     updated += 1;
   }
 
@@ -1006,18 +1128,43 @@ export function applyEnemyMovement(
       continue;
     }
 
-    const knights = members.filter((enemy) => enemy.enemyType === "WARRIOR");
-    const monks = members.filter((enemy) => enemy.enemyType === "MONK");
+    const knights = members
+      .filter((enemy) => enemy.enemyType === "WARRIOR")
+      .sort((a, b) => a.id - b.id);
+    const monks = members
+      .filter((enemy) => enemy.enemyType === "MONK")
+      .sort((a, b) => a.id - b.id);
     const backDir = normalizeVector(leader.x - target.x, leader.y - target.y);
     const forwardDir = normalizeVector(target.x - leader.x, target.y - leader.y);
     const perp = { x: -backDir.y, y: backDir.x };
+    const occupiedSlots = new Set<string>();
 
     if (faction.formationMode !== "chase") {
-      const baseDistance =
-        faction.formationMode === "shield_wall" ? NPC_FORMATION_SAFE_DISTANCE : NPC_FORMATION_ATTACK_DISTANCE;
+      const desiredFrontCenter = computeFormationFrontCenter(leader, target, faction.formationMode);
+      const anchorAge = nowMs - faction.formationAnchorUpdatedAtMs;
+      const targetMoved = Math.hypot(
+        target.x - faction.formationAnchorTargetX,
+        target.y - faction.formationAnchorTargetY
+      );
+      if (!Number.isFinite(faction.formationAnchorX) || !Number.isFinite(faction.formationAnchorY)) {
+        faction.formationAnchorX = desiredFrontCenter.x;
+        faction.formationAnchorY = desiredFrontCenter.y;
+        faction.formationAnchorTargetX = target.x;
+        faction.formationAnchorTargetY = target.y;
+        faction.formationAnchorUpdatedAtMs = nowMs;
+      } else if (anchorAge >= NPC_FORMATION_ANCHOR_UPDATE_MS || targetMoved >= NPC_FORMATION_ANCHOR_MOVE_THRESHOLD) {
+        const lerpFactor =
+          faction.formationMode === "shield_wall" ? NPC_FORMATION_SHIELD_LERP : NPC_FORMATION_ANCHOR_LERP;
+        faction.formationAnchorX = lerp(faction.formationAnchorX, desiredFrontCenter.x, lerpFactor);
+        faction.formationAnchorY = lerp(faction.formationAnchorY, desiredFrontCenter.y, lerpFactor);
+        faction.formationAnchorTargetX = target.x;
+        faction.formationAnchorTargetY = target.y;
+        faction.formationAnchorUpdatedAtMs = nowMs;
+      }
+
       const frontCenter = {
-        x: target.x + backDir.x * baseDistance,
-        y: target.y + backDir.y * baseDistance
+        x: faction.formationAnchorX,
+        y: faction.formationAnchorY
       };
 
       knights.forEach((enemy, index) => {
@@ -1026,8 +1173,10 @@ export function applyEnemyMovement(
           frontCenter.x + perp.x * offset,
           frontCenter.y + perp.y * offset,
           NPC_FORMATION_SLOT_SEARCH_RADIUS,
-          tileSolido
+          tileSolido,
+          occupiedSlots
         );
+        occupiedSlots.add(`${Math.round(slot.x)},${Math.round(slot.y)}`);
         factionSlotsByEnemyId.set(enemy.id, slot);
       });
 
@@ -1035,16 +1184,20 @@ export function applyEnemyMovement(
         frontCenter.x + backDir.x * NPC_FORMATION_MONK_BACK_OFFSET,
         frontCenter.y + backDir.y * NPC_FORMATION_MONK_BACK_OFFSET,
         NPC_FORMATION_SLOT_SEARCH_RADIUS,
-        tileSolido
+        tileSolido,
+        occupiedSlots
       );
+      occupiedSlots.add(`${Math.round(monksCenter.x)},${Math.round(monksCenter.y)}`);
       monks.forEach((enemy, index) => {
         const offset = formationSlotOffset(index, monks.length, NPC_FORMATION_LINE_SPACING);
         const slot = findNearestValidPosition(
           monksCenter.x + perp.x * offset,
           monksCenter.y + perp.y * offset,
           NPC_FORMATION_SLOT_SEARCH_RADIUS,
-          tileSolido
+          tileSolido,
+          occupiedSlots
         );
+        occupiedSlots.add(`${Math.round(slot.x)},${Math.round(slot.y)}`);
         factionSlotsByEnemyId.set(enemy.id, slot);
       });
 
@@ -1052,8 +1205,10 @@ export function applyEnemyMovement(
         monksCenter.x + backDir.x * NPC_FORMATION_LEADER_BACK_OFFSET,
         monksCenter.y + backDir.y * NPC_FORMATION_LEADER_BACK_OFFSET,
         NPC_FORMATION_SLOT_SEARCH_RADIUS,
-        tileSolido
+        tileSolido,
+        occupiedSlots
       );
+      occupiedSlots.add(`${Math.round(leaderPos.x)},${Math.round(leaderPos.y)}`);
       factionSlotsByEnemyId.set(leader.id, leaderPos);
     }
 
@@ -1237,10 +1392,14 @@ export function applyEnemyMovement(
               const dx = desired.x - enemy.x;
               const dy = desired.y - enemy.y;
               const dist = Math.hypot(dx, dy);
-              if (dist > NPC_ENCIRCLE_MIN_DISTANCE) {
+              if (dist > NPC_FORMATION_SLOT_HOLD_RADIUS) {
                 const normalized = normalizeVector(dx, dy);
-                targetX = normalized.x;
-                targetY = normalized.y;
+                const speedScale = dist < NPC_FORMATION_SLOT_SLOW_RADIUS ? dist / NPC_FORMATION_SLOT_SLOW_RADIUS : 1;
+                targetX = normalized.x * speedScale;
+                targetY = normalized.y * speedScale;
+              } else {
+                targetX = 0;
+                targetY = 0;
               }
             }
           }
@@ -1364,9 +1523,12 @@ export function applyEnemyMovement(
 
       if (!enemy.isAiCompanion) {
         const separation = computeSeparationVector(enemy, nonAiAlive);
+        const faction = getFactionForEnemy(enemy);
+        const factionPlan = faction ? factionPlanById.get(faction.id) ?? null : null;
+        const separationScale = factionPlan ? 0.35 : 1;
         if (Math.abs(separation.x) > 0.001 || Math.abs(separation.y) > 0.001) {
-          targetX += separation.x * NPC_SEPARATION_STRENGTH;
-          targetY += separation.y * NPC_SEPARATION_STRENGTH;
+          targetX += separation.x * NPC_SEPARATION_STRENGTH * separationScale;
+          targetY += separation.y * NPC_SEPARATION_STRENGTH * separationScale;
         }
       }
 
