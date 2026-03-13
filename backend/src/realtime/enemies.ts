@@ -28,10 +28,11 @@ const MONK_SUPPORT_COOLDOWN_MS = 1200;
 const NPC_FACTION_MIN_COUNT = 5;
 const NPC_FACTION_SIZE = 9;
 const NPC_FACTION_CLUSTER_RADIUS = 6.4;
-const NPC_FACTION_FOLLOW_RADIUS = 10.2;
-const NPC_FACTION_GUARD_RADIUS = 1.3;
-const NPC_FACTION_LEASH_EXTRA = 2.6;
-const NPC_FACTION_LEASH_RADIUS = NPC_FACTION_FOLLOW_RADIUS + NPC_FACTION_LEASH_EXTRA;
+const NPC_FACTION_COMMAND_RADIUS = 14;
+const NPC_FACTION_ATTACK_LEASH_RADIUS = 18;
+const NPC_FACTION_IDLE_RADIUS = 40;
+const NPC_FACTION_DETECTION_RADIUS = 14;
+const NPC_FACTION_GUARD_RADIUS = 2.2;
 const NPC_FACTION_AGGRO_MEMORY_MS = 9000;
 const NPC_CHAT_RADIUS = 4.6;
 const NPC_CHAT_INTERVAL_MIN_MS = 9000;
@@ -56,7 +57,7 @@ const NPC_FORMATION_SHIELD_TRIGGER = 3;
 const NPC_FORMATION_SHIELD_WINDOW_MS = 2600;
 const NPC_FORMATION_SHIELD_DURATION_MS = 5200;
 const NPC_FORMATION_CHASE_ON_HIT_MS = 3200;
-const NPC_FORMATION_CHASE_DISTANCE = 7.2;
+const NPC_FORMATION_CHASE_DISTANCE = NPC_FACTION_COMMAND_RADIUS;
 const NPC_FORMATION_SAFE_DISTANCE = 2.4;
 const NPC_FORMATION_ATTACK_DISTANCE = 1.9;
 const NPC_FORMATION_MONK_BACK_OFFSET = 1.2;
@@ -69,6 +70,8 @@ const NPC_FORMATION_ANCHOR_UPDATE_MS = 350;
 const NPC_FORMATION_ANCHOR_MOVE_THRESHOLD = 0.6;
 const NPC_FORMATION_ANCHOR_LERP = 0.32;
 const NPC_FORMATION_SHIELD_LERP = 0.18;
+const NPC_CERCO_ATTACKER_SWAP_MS = 2600;
+const NPC_CERCO_ATTACKER_POST_ATTACK_MS = 300;
 const NPC_LEADER_SPEED_MULT = 0.75;
 const NPC_LEADER_CHASE_DISTANCE = 4.4;
 const NPC_LEADER_CHASE_BAND = 0.6;
@@ -153,7 +156,7 @@ export type EnemyAttackResult = {
 };
 
 type NpcFactionBehavior = "aggressive" | "neutral";
-type NpcFormationMode = "attack" | "shield_wall" | "chase";
+type NpcFormationMode = "cerco" | "shield_wall" | "ataque";
 
 type NpcFaction = {
   id: number;
@@ -169,6 +172,8 @@ type NpcFaction = {
   formationAnchorTargetX: number;
   formationAnchorTargetY: number;
   formationAnchorUpdatedAtMs: number;
+  cercoAttackerId: number | null;
+  cercoLastSwitchAtMs: number;
 };
 
 type QueuedNpcChatMessage = {
@@ -431,14 +436,16 @@ function assignNpcFactions(enemies: OnlineEnemyState[]): void {
         leaderId: leader.id,
         behavior,
         targetPlayerId: null,
-        formationMode: "attack",
+        formationMode: "cerco",
         formationUntilMs: 0,
         lastCommandAtMs: 0,
         formationAnchorX: leader.x,
         formationAnchorY: leader.y,
         formationAnchorTargetX: leader.x,
         formationAnchorTargetY: leader.y,
-        formationAnchorUpdatedAtMs: nowMs
+        formationAnchorUpdatedAtMs: nowMs,
+        cercoAttackerId: null,
+        cercoLastSwitchAtMs: 0
       });
       for (const member of members) {
         member.factionId = factionId;
@@ -470,7 +477,7 @@ function refreshFactionLeaders(nowMs: number, enemiesById: Map<number, OnlineEne
     const nextLeader = randomFrom(candidates);
     faction.leaderId = nextLeader.id;
     NPC_FACTION_AGGRO_BY_ID.delete(faction.id);
-    faction.formationMode = "attack";
+    faction.formationMode = "cerco";
     faction.formationUntilMs = 0;
     faction.lastCommandAtMs = nowMs;
     faction.formationAnchorX = nextLeader.x;
@@ -478,6 +485,8 @@ function refreshFactionLeaders(nowMs: number, enemiesById: Map<number, OnlineEne
     faction.formationAnchorTargetX = nextLeader.x;
     faction.formationAnchorTargetY = nextLeader.y;
     faction.formationAnchorUpdatedAtMs = nowMs;
+    faction.cercoAttackerId = null;
+    faction.cercoLastSwitchAtMs = nowMs;
   }
 }
 
@@ -515,6 +524,7 @@ function refreshFactionFormations(
   enemies: OnlineEnemyState[],
   playersById: Map<number, { characterId: number; x: number; y: number; isSpawnProtected: boolean }>
 ): void {
+  const enemiesById = new Map(enemies.map((enemy) => [enemy.id, enemy]));
   for (const faction of NPC_FACTIONS.values()) {
     const leader = enemies.find((enemy) => enemy.id === faction.leaderId) ?? null;
     if (!leader || leader.deadUntilMs !== null || leader.hp <= 0) {
@@ -522,41 +532,82 @@ function refreshFactionFormations(
       continue;
     }
 
+    const members = enemies.filter(
+      (enemy) => enemy.factionId === faction.id && enemy.deadUntilMs === null && enemy.hp > 0
+    );
     const previousMode = faction.formationMode;
     const previousTarget = faction.targetPlayerId;
     let targetPlayer: { characterId: number; x: number; y: number } | null = null;
+    let forceShieldWall = false;
     const factionAggro = NPC_FACTION_AGGRO_BY_ID.get(faction.id) ?? null;
     if (factionAggro && factionAggro.untilMs > nowMs) {
       const aggPlayer = playersById.get(factionAggro.playerId) ?? null;
       if (aggPlayer && !aggPlayer.isSpawnProtected) {
-        targetPlayer = { characterId: factionAggro.playerId, x: aggPlayer.x, y: aggPlayer.y };
+        if (faction.behavior === "neutral") {
+          const distToLeader = Math.hypot(aggPlayer.x - leader.x, aggPlayer.y - leader.y);
+          if (distToLeader <= NPC_FACTION_IDLE_RADIUS) {
+            targetPlayer = { characterId: factionAggro.playerId, x: aggPlayer.x, y: aggPlayer.y };
+            forceShieldWall = true;
+          }
+        } else {
+          targetPlayer = { characterId: factionAggro.playerId, x: aggPlayer.x, y: aggPlayer.y };
+        }
       }
     }
 
     if (!targetPlayer) {
-      let nearest: { characterId: number; x: number; y: number } | null = null;
-      let nearestDist = Number.POSITIVE_INFINITY;
       if (faction.behavior === "aggressive") {
+        let nearest: { characterId: number; x: number; y: number } | null = null;
+        let nearestDist = Number.POSITIVE_INFINITY;
         for (const player of playersById.values()) {
           if (player.isSpawnProtected) {
             continue;
           }
-          const dist = Math.hypot(player.x - leader.x, player.y - leader.y);
-          if (dist < nearestDist) {
-            nearestDist = dist;
-            nearest = { characterId: player.characterId, x: player.x, y: player.y };
+          for (const member of members) {
+            const dist = Math.hypot(player.x - member.x, player.y - member.y);
+            if (dist < nearestDist) {
+              nearestDist = dist;
+              nearest = { characterId: player.characterId, x: player.x, y: player.y };
+            }
           }
         }
-      }
-      if (nearest && nearestDist <= NPC_FORMATION_CHASE_DISTANCE) {
-        targetPlayer = nearest;
+        if (nearest && nearestDist <= NPC_FACTION_DETECTION_RADIUS) {
+          targetPlayer = nearest;
+        }
       }
     }
 
     faction.targetPlayerId = targetPlayer?.characterId ?? null;
 
     if (!targetPlayer) {
-      faction.formationMode = "attack";
+      faction.formationMode = "cerco";
+      continue;
+    }
+
+    const allowedRadius =
+      faction.formationMode === "cerco" || faction.formationMode === "ataque"
+        ? NPC_FACTION_ATTACK_LEASH_RADIUS
+        : NPC_FACTION_COMMAND_RADIUS;
+    const maxDistFromLeader = members.reduce((maxDist, member) => {
+      const dist = Math.hypot(member.x - leader.x, member.y - leader.y);
+      return Math.max(maxDist, dist);
+    }, 0);
+    if (maxDistFromLeader > allowedRadius) {
+      if (nowMs - faction.lastCommandAtMs > 1200) {
+        queueNpcChat(leader.id, "RECUAR!", randomInt(200, 350));
+        applyNpcPause(leader, nowMs, 7);
+      }
+      faction.targetPlayerId = null;
+      faction.formationMode = "cerco";
+      faction.formationUntilMs = 0;
+      faction.lastCommandAtMs = nowMs;
+      faction.formationAnchorX = leader.x;
+      faction.formationAnchorY = leader.y;
+      faction.formationAnchorTargetX = leader.x;
+      faction.formationAnchorTargetY = leader.y;
+      faction.formationAnchorUpdatedAtMs = nowMs;
+      faction.cercoAttackerId = null;
+      faction.cercoLastSwitchAtMs = nowMs;
       continue;
     }
 
@@ -575,7 +626,7 @@ function refreshFactionFormations(
         nowMs - enemy.lastAttackedAtMs <= NPC_FORMATION_SHIELD_WINDOW_MS
     );
 
-    if (recentHits.length >= NPC_FORMATION_SHIELD_TRIGGER) {
+    if (forceShieldWall || recentHits.length >= NPC_FORMATION_SHIELD_TRIGGER) {
       faction.formationMode = "shield_wall";
       faction.formationUntilMs = nowMs + NPC_FORMATION_SHIELD_DURATION_MS;
       faction.lastCommandAtMs = nowMs;
@@ -592,11 +643,11 @@ function refreshFactionFormations(
       continue;
     }
     if (recentHits.length > 0) {
-      faction.formationMode = "chase";
+      faction.formationMode = "ataque";
       faction.formationUntilMs = nowMs + NPC_FORMATION_CHASE_ON_HIT_MS;
       faction.lastCommandAtMs = nowMs;
       if (previousMode !== faction.formationMode) {
-        queueNpcChat(leader.id, "AVANCAR!", randomInt(200, 350));
+        queueNpcChat(leader.id, "ATAQUE!!", randomInt(200, 350));
         applyNpcPause(leader, nowMs, 8);
       }
       continue;
@@ -604,24 +655,24 @@ function refreshFactionFormations(
 
     const distToPlayer = Math.hypot(targetPlayer.x - leader.x, targetPlayer.y - leader.y);
     if (distToPlayer >= NPC_FORMATION_CHASE_DISTANCE) {
-      faction.formationMode = "chase";
+      faction.formationMode = "ataque";
       faction.formationUntilMs = nowMs + NPC_FORMATION_REEVAL_MS * 2;
       faction.lastCommandAtMs = nowMs;
       if (previousMode !== faction.formationMode) {
-        queueNpcChat(leader.id, "FORMACAO DE ATAQUE!", randomInt(200, 350));
-        applyNpcPause(leader, nowMs, 18);
+        queueNpcChat(leader.id, "ATAQUE!!", randomInt(200, 350));
+        applyNpcPause(leader, nowMs, 10);
       }
       continue;
     }
 
-    faction.formationMode = "attack";
+    faction.formationMode = "cerco";
     faction.formationUntilMs = 0;
     faction.lastCommandAtMs = nowMs;
 
     if (previousMode !== faction.formationMode || previousTarget !== faction.targetPlayerId) {
       if (previousMode !== faction.formationMode) {
-        queueNpcChat(leader.id, "FORMACAO DE ATAQUE!", randomInt(200, 350));
-        applyNpcPause(leader, nowMs, 18);
+        queueNpcChat(leader.id, "CERCO!!!", randomInt(200, 350));
+        applyNpcPause(leader, nowMs, 10);
       }
       const anchor = computeFormationFrontCenter(leader, targetPlayer, faction.formationMode);
       faction.formationAnchorX = anchor.x;
@@ -629,6 +680,47 @@ function refreshFactionFormations(
       faction.formationAnchorTargetX = targetPlayer.x;
       faction.formationAnchorTargetY = targetPlayer.y;
       faction.formationAnchorUpdatedAtMs = nowMs;
+    }
+
+    if (faction.formationMode === "cerco" && faction.targetPlayerId) {
+      const knights = members.filter((member) => member.enemyType === "WARRIOR");
+      const currentAttacker = faction.cercoAttackerId ? enemiesById.get(faction.cercoAttackerId) ?? null : null;
+      const attackerValid =
+        currentAttacker &&
+        currentAttacker.deadUntilMs === null &&
+        currentAttacker.hp > 0 &&
+        currentAttacker.factionId === faction.id &&
+        currentAttacker.enemyType === "WARRIOR";
+
+      let shouldSwitch = !attackerValid;
+      if (attackerValid) {
+        if (nowMs - faction.cercoLastSwitchAtMs > NPC_CERCO_ATTACKER_SWAP_MS) {
+          shouldSwitch = true;
+        }
+        if (
+          currentAttacker.lastAttackAtMs > faction.cercoLastSwitchAtMs &&
+          nowMs - currentAttacker.lastAttackAtMs > NPC_CERCO_ATTACKER_POST_ATTACK_MS
+        ) {
+          shouldSwitch = true;
+        }
+      }
+
+      if (knights.length === 0) {
+        faction.cercoAttackerId = null;
+      } else if (shouldSwitch) {
+        const sorted = [...knights]
+          .filter((knight) => knight.id !== currentAttacker?.id)
+          .sort((a, b) => {
+            const distA = Math.hypot(a.x - targetPlayer.x, a.y - targetPlayer.y);
+            const distB = Math.hypot(b.x - targetPlayer.x, b.y - targetPlayer.y);
+            return distA - distB;
+          });
+        const nextAttacker = sorted[0] ?? currentAttacker ?? knights[0];
+        faction.cercoAttackerId = nextAttacker.id;
+        faction.cercoLastSwitchAtMs = nowMs;
+      }
+    } else {
+      faction.cercoAttackerId = null;
     }
   }
 }
@@ -833,7 +925,7 @@ export function handlePlayerChatForAi(playerId: number, playerName: string, text
   enemyAiDirector.handlePlayerChatForAi(playerId, playerName, text);
 }
 
-export function forceNpcFormation(mode: "shield_wall" | "attack"): number {
+export function forceNpcFormation(mode: "shield_wall" | "cerco" | "ataque"): number {
   const nowMs = Date.now();
   const players = buildPublicPlayersSnapshot().filter((player) => player.hp > 0);
   if (players.length === 0) {
@@ -1139,7 +1231,49 @@ export function applyEnemyMovement(
     const perp = { x: -backDir.y, y: backDir.x };
     const occupiedSlots = new Set<string>();
 
-    if (faction.formationMode !== "chase") {
+    if (faction.formationMode === "cerco") {
+      const attackerId = faction.cercoAttackerId ?? null;
+      const ringKnights = attackerId ? knights.filter((enemy) => enemy.id !== attackerId) : knights;
+      if (ringKnights.length > 0) {
+        const radius = Math.max(
+          NPC_ENCIRCLE_MIN_DISTANCE,
+          NPC_ENCIRCLE_RADIUS_BASE + ringKnights.length * NPC_ENCIRCLE_RADIUS_PER_MEMBER
+        );
+        ringKnights.forEach((enemy, index) => {
+          const angle = (index / ringKnights.length) * Math.PI * 2 + enemy.encircleAngleRad * 0.2;
+          const slot = findNearestValidPosition(
+            target.x + Math.cos(angle) * radius,
+            target.y + Math.sin(angle) * radius,
+            NPC_FORMATION_SLOT_SEARCH_RADIUS,
+            tileSolido,
+            occupiedSlots
+          );
+          occupiedSlots.add(`${Math.round(slot.x)},${Math.round(slot.y)}`);
+          factionSlotsByEnemyId.set(enemy.id, slot);
+        });
+      }
+
+      const monksCenter = findNearestValidPosition(
+        leader.x + backDir.x * (NPC_FORMATION_MONK_BACK_OFFSET + 0.6),
+        leader.y + backDir.y * (NPC_FORMATION_MONK_BACK_OFFSET + 0.6),
+        NPC_FORMATION_SLOT_SEARCH_RADIUS,
+        tileSolido,
+        occupiedSlots
+      );
+      occupiedSlots.add(`${Math.round(monksCenter.x)},${Math.round(monksCenter.y)}`);
+      monks.forEach((enemy, index) => {
+        const offset = formationSlotOffset(index, monks.length, NPC_FORMATION_LINE_SPACING);
+        const slot = findNearestValidPosition(
+          monksCenter.x + perp.x * offset,
+          monksCenter.y + perp.y * offset,
+          NPC_FORMATION_SLOT_SEARCH_RADIUS,
+          tileSolido,
+          occupiedSlots
+        );
+        occupiedSlots.add(`${Math.round(slot.x)},${Math.round(slot.y)}`);
+        factionSlotsByEnemyId.set(enemy.id, slot);
+      });
+    } else if (faction.formationMode === "shield_wall") {
       const desiredFrontCenter = computeFormationFrontCenter(leader, target, faction.formationMode);
       const anchorAge = nowMs - faction.formationAnchorUpdatedAtMs;
       const targetMoved = Math.hypot(
@@ -1355,7 +1489,9 @@ export function applyEnemyMovement(
 
         if (factionPlan && factionPlan.targetPlayerId) {
           const targetPlayer = playersById.get(factionPlan.targetPlayerId) ?? null;
-          if (factionPlan.mode === "chase" && targetPlayer) {
+          if (!targetPlayer) {
+            // sem alvo valido
+          } else if (factionPlan.mode === "ataque") {
             if (enemy.id === factionPlan.leaderId) {
               const dx = targetPlayer.x - enemy.x;
               const dy = targetPlayer.y - enemy.y;
@@ -1379,27 +1515,130 @@ export function applyEnemyMovement(
                 const dx = leader.x - enemy.x;
                 const dy = leader.y - enemy.y;
                 const dist = Math.hypot(dx, dy);
-                if (dist > NPC_FACTION_FOLLOW_RADIUS) {
+                if (dist > NPC_FACTION_ATTACK_LEASH_RADIUS) {
                   const normalized = normalizeVector(dx, dy);
                   targetX = normalized.x;
                   targetY = normalized.y;
                 }
               }
+
+              if (targetX === 0 && targetY === 0) {
+                if (enemy.enemyType === "MONK" && leader) {
+                  const dx = leader.x - enemy.x;
+                  const dy = leader.y - enemy.y;
+                  const dist = Math.hypot(dx, dy);
+                  if (dist > NPC_FACTION_GUARD_RADIUS * 2.2) {
+                    const normalized = normalizeVector(dx, dy);
+                    targetX = normalized.x;
+                    targetY = normalized.y;
+                  }
+                } else {
+                  const toTarget = normalizeVector(targetPlayer.x - enemy.x, targetPlayer.y - enemy.y);
+                  const side = { x: -toTarget.y, y: toTarget.x };
+                  const lateral = Math.sin(enemy.encircleAngleRad) * 0.6;
+                  const combined = normalizeVector(
+                    toTarget.x + side.x * lateral,
+                    toTarget.y + side.y * lateral
+                  );
+                  targetX = combined.x;
+                  targetY = combined.y;
+                }
+              }
             }
-          } else {
-            const desired = factionSlotsByEnemyId.get(enemy.id) ?? null;
-            if (desired) {
-              const dx = desired.x - enemy.x;
-              const dy = desired.y - enemy.y;
+          } else if (factionPlan.mode === "cerco") {
+            const leader = enemiesById.get(factionPlan.leaderId) ?? null;
+            const attackerId = faction?.cercoAttackerId ?? null;
+            if (enemy.id === factionPlan.leaderId) {
+              const dx = targetPlayer.x - enemy.x;
+              const dy = targetPlayer.y - enemy.y;
               const dist = Math.hypot(dx, dy);
-              if (dist > NPC_FORMATION_SLOT_HOLD_RADIUS) {
+              const desired = NPC_LEADER_CHASE_DISTANCE;
+              if (dist > desired + NPC_LEADER_CHASE_BAND) {
                 const normalized = normalizeVector(dx, dy);
-                const speedScale = dist < NPC_FORMATION_SLOT_SLOW_RADIUS ? dist / NPC_FORMATION_SLOT_SLOW_RADIUS : 1;
-                targetX = normalized.x * speedScale;
-                targetY = normalized.y * speedScale;
+                targetX = normalized.x;
+                targetY = normalized.y;
+              } else if (dist < desired - NPC_LEADER_CHASE_BAND) {
+                const away = normalizeVector(enemy.x - targetPlayer.x, enemy.y - targetPlayer.y);
+                targetX = away.x;
+                targetY = away.y;
               } else {
                 targetX = 0;
                 targetY = 0;
+              }
+            } else {
+              if (leader) {
+                const dxLeader = leader.x - enemy.x;
+                const dyLeader = leader.y - enemy.y;
+                const distLeader = Math.hypot(dxLeader, dyLeader);
+                if (distLeader > NPC_FACTION_ATTACK_LEASH_RADIUS) {
+                  const normalized = normalizeVector(dxLeader, dyLeader);
+                  targetX = normalized.x;
+                  targetY = normalized.y;
+                }
+              }
+
+              if (targetX === 0 && targetY === 0 && attackerId && enemy.id === attackerId) {
+                const dx = targetPlayer.x - enemy.x;
+                const dy = targetPlayer.y - enemy.y;
+                const dist = Math.hypot(dx, dy);
+                if (dist > ENEMY_ATTACK_DISTANCE) {
+                  const normalized = normalizeVector(dx, dy);
+                  targetX = normalized.x;
+                  targetY = normalized.y;
+                } else {
+                  targetX = 0;
+                  targetY = 0;
+                }
+              }
+
+              if (targetX === 0 && targetY === 0) {
+                const desired = factionSlotsByEnemyId.get(enemy.id) ?? null;
+                if (desired) {
+                  const dx = desired.x - enemy.x;
+                  const dy = desired.y - enemy.y;
+                  const dist = Math.hypot(dx, dy);
+                  if (dist > NPC_FORMATION_SLOT_HOLD_RADIUS) {
+                    const normalized = normalizeVector(dx, dy);
+                    const speedScale =
+                      dist < NPC_FORMATION_SLOT_SLOW_RADIUS ? dist / NPC_FORMATION_SLOT_SLOW_RADIUS : 1;
+                    targetX = normalized.x * speedScale;
+                    targetY = normalized.y * speedScale;
+                  } else {
+                    targetX = 0;
+                    targetY = 0;
+                  }
+                }
+              }
+            }
+          } else {
+            const leader = enemiesById.get(factionPlan.leaderId) ?? null;
+            if (leader && enemy.id !== factionPlan.leaderId) {
+              const dxLeader = leader.x - enemy.x;
+              const dyLeader = leader.y - enemy.y;
+              const distLeader = Math.hypot(dxLeader, dyLeader);
+              if (distLeader > NPC_FACTION_COMMAND_RADIUS) {
+                const normalized = normalizeVector(dxLeader, dyLeader);
+                targetX = normalized.x;
+                targetY = normalized.y;
+              }
+            }
+
+            if (targetX === 0 && targetY === 0) {
+              const desired = factionSlotsByEnemyId.get(enemy.id) ?? null;
+              if (desired) {
+                const dx = desired.x - enemy.x;
+                const dy = desired.y - enemy.y;
+                const dist = Math.hypot(dx, dy);
+                if (dist > NPC_FORMATION_SLOT_HOLD_RADIUS) {
+                  const normalized = normalizeVector(dx, dy);
+                  const speedScale =
+                    dist < NPC_FORMATION_SLOT_SLOW_RADIUS ? dist / NPC_FORMATION_SLOT_SLOW_RADIUS : 1;
+                  targetX = normalized.x * speedScale;
+                  targetY = normalized.y * speedScale;
+                } else {
+                  targetX = 0;
+                  targetY = 0;
+                }
               }
             }
           }
@@ -1471,7 +1710,7 @@ export function applyEnemyMovement(
               const dx = leader.x - enemy.x;
               const dy = leader.y - enemy.y;
               const dist = Math.hypot(dx, dy);
-              if (dist > NPC_FACTION_FOLLOW_RADIUS) {
+              if (dist > NPC_FACTION_IDLE_RADIUS) {
                 const normalized = normalizeVector(dx, dy);
                 targetX = normalized.x;
                 targetY = normalized.y;
@@ -1499,7 +1738,7 @@ export function applyEnemyMovement(
           const dx = leader.x - enemy.x;
           const dy = leader.y - enemy.y;
           const dist = Math.hypot(dx, dy);
-          if (dist > NPC_FACTION_LEASH_RADIUS) {
+          if (dist > NPC_FACTION_IDLE_RADIUS) {
             const normalized = normalizeVector(dx, dy);
             targetX = normalized.x;
             targetY = normalized.y;

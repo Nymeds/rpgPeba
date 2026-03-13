@@ -373,7 +373,7 @@ export async function registrarEventosSocket(app: FastifyInstance, io: SocketIOS
           const updated = forceNpcFormation("shield_wall");
           responseText = `Formacao parede aplicada em ${updated} faccoes.`;
         } else if (command === "ataque") {
-          const updated = forceNpcFormation("attack");
+          const updated = forceNpcFormation("ataque");
           responseText = `Formacao ataque aplicada em ${updated} faccoes.`;
         }
         const systemMessage: ChatMessagePayload = {
